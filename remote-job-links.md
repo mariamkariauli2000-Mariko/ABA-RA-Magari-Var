@@ -4,6 +4,7 @@ Saved for future reference.
 
 ## Job boards
 
+- [LinkedIn Jobs](https://www.linkedin.com/jobs/)
 - [Himalayas](https://himalayas.app/)
 - [Remotive](https://remotive.com/)
 - [Remote4Me](https://remote4me.com/)

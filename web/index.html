@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="workspace-token" content="__WORKSPACE_TOKEN__">
+  <meta name="theme-color" content="#f7f7f5">
+  <title>Job Journal · Your opportunities</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to opportunities</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Workspace navigation">
+      <a class="workspace-brand" href="#board">Job Journal</a>
+      <div class="sidebar-label">Workspace</div>
+      <nav id="navigation">
+        <button class="nav-item active" data-view="board">All opportunities<span class="nav-count" id="count-all">0</span></button>
+        <button class="nav-item" data-view="unreviewed">To review<span class="nav-count" id="count-unreviewed">0</span></button>
+        <button class="nav-item" data-view="shortlisted">Shortlisted<span class="nav-count" id="count-shortlisted">0</span></button>
+        <button class="nav-item" data-view="closed">Closed</button>
+      </nav>
+      <div class="sidebar-label second-label">Search settings</div>
+      <button class="nav-item" data-view="profile">Search profile</button>
+      <button class="nav-item" data-view="sources">Sources & searches</button>
+      <div class="sidebar-footer"><span>Stored on this Mac</span><button class="text-button" id="refresh-button" aria-label="Refresh workspace">Refresh</button></div>
+    </aside>
+    <div class="content-shell">
+      <header class="topbar"><div class="breadcrumbs"><button class="text-button mobile-menu" id="menu-button" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar">Menu</button><span>Job Journal</span><span class="breadcrumb-slash">/</span><span id="breadcrumb-current">Opportunities</span></div><a class="text-button" href="/api/export.csv" aria-label="Export jobs as CSV">Export</a></header>
+      <main id="main" tabindex="-1"><div class="loading-state">Opening your workspace…</div></main>
+    </div>
+  </div>
+  <dialog id="job-dialog" class="job-dialog" aria-label="Job details"><div id="job-detail"></div></dialog>
+  <dialog id="add-dialog" class="center-dialog" aria-labelledby="add-title">
+    <div class="modal-heading"><h2 id="add-title">Add a job</h2><button class="text-button" data-close="add-dialog" aria-label="Close add job">Close</button></div>
+    <form id="add-form" class="modal-form">
+      <label>Job title<input name="title" required maxlength="500" placeholder="e.g. Customer Success Manager"></label>
+      <div class="form-grid"><label>Company<input name="company" required maxlength="500" placeholder="Company name"></label><label>Location<input name="location_text" placeholder="e.g. Remote · Europe"></label></div>
+      <label>Listing URL<input name="source_url" type="url" required placeholder="https://…"></label>
+      <div class="form-grid"><label>Status<select name="status" id="add-status"></select></label><label>Work setup<select name="remote_status"><option value="unknown">Not specified</option><option value="remote">Remote</option><option value="hybrid">Hybrid</option><option value="onsite">On-site</option></select></label></div>
+      <label><span>Description <span class="optional">optional</span></span><textarea name="description" rows="4" placeholder="Paste the job description to keep it here."></textarea></label>
+      <div class="form-footer"><button class="button primary" type="submit">Add opportunity</button></div>
+    </form>
+  </dialog>
+  <dialog id="search-dialog" class="center-dialog search-dialog" aria-labelledby="search-title">
+    <div class="modal-heading"><h2 id="search-title">Search with Claude</h2><button class="text-button" data-close="search-dialog" aria-label="Close search instructions">Close</button></div>
+    <p class="modal-copy">Open this project in Claude Code and paste the command below. Claude will read your saved profile and add found jobs to this board.</p>
+    <pre id="search-command">/remote-jobs search using my saved profile; use a 20-minute budget</pre>
+    <p class="search-hint" id="search-profile-hint">Add your search preferences in your profile.</p>
+    <div class="modal-bottom"><button class="button" id="search-edit-profile">Edit search profile</button><button class="button primary" id="copy-search">Copy command</button></div>
+  </dialog>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
