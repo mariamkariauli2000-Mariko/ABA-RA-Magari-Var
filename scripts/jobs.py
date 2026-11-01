@@ -121,9 +121,15 @@ def save_assessments(db, records):
         score = record['fit_score']
         if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 100:
             raise ValueError('fit_score must be a whole number from 1 to 100')
-        for key, limit in (('fit_reason', 2000), ('summary', 3000)):
+        # Signal, not prose: one fact line, and at most three short tagged checks.
+        for key, limit in (('fit_reason', 300), ('summary', 200)):
             if not isinstance(record[key], str) or not record[key].strip() or len(record[key]) > limit:
                 raise ValueError(f'{key} must be nonempty text, at most {limit} characters')
+        checks = record['fit_reason'].strip().splitlines()
+        if len(checks) > 3 or any(not line.startswith(('+ ', '− ', '✕ ')) or len(line) > 90 for line in checks):
+            raise ValueError('fit_reason must be 1-3 lines, each starting with "+ ", "− " or "✕ " and at most 90 characters')
+        if '\n' in record['summary'].strip():
+            raise ValueError('summary must be a single line')
         rows.append((record['job_id'], score, record['fit_reason'].strip(), record['summary'].strip()))
     with write_transaction(db):
         version, timestamp = get_profile(db)['version'], now()

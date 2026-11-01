@@ -170,16 +170,19 @@ class JobStorageTests(unittest.TestCase):
         low, high = sorted(job['id'] for job in self.call('list'))
         self.call('review', low, '--status', 'shortlisted', '--notes', 'Keep me')
         error = self.call('assess', '--file', '-', ok=False,
-                          payload=[{'job_id': high, 'fit_score': 101, 'fit_reason': 'x', 'summary': 'y'}])
+                          payload=[{'job_id': high, 'fit_score': 101, 'fit_reason': '+ x', 'summary': 'y'}])
         self.assertIn('1 to 100', error['error'])
+        error = self.call('assess', '--file', '-', ok=False,
+                          payload=[{'job_id': high, 'fit_score': 50, 'fit_reason': 'A long prose paragraph.', 'summary': 'y'}])
+        self.assertIn('"+ "', error['error'])
         self.assertEqual(self.sql('SELECT count(*) FROM job_assessments'), [(0,)])
         saved = self.call('assess', '--file', '-', payload=[
-            {'job_id': low, 'fit_score': 40, 'fit_reason': 'Partial match.', 'summary': 'Short.'},
-            {'job_id': high, 'fit_score': 90, 'fit_reason': 'Strong match.', 'summary': 'Short too.'}])
+            {'job_id': low, 'fit_score': 40, 'fit_reason': '+ Partial match\n− Gap', 'summary': 'Short.'},
+            {'job_id': high, 'fit_score': 90, 'fit_reason': '+ Strong match', 'summary': 'Short too.'}])
         self.assertEqual(saved['assessed'], 2)
         listed = self.call('list')
         self.assertEqual([job['id'] for job in listed], [high, low])
-        self.assertEqual(listed[0]['fit_reason'], 'Strong match.')
+        self.assertEqual(listed[0]['fit_reason'], '+ Strong match')
         reviewed = next(job for job in listed if job['id'] == low)
         self.assertEqual((reviewed['review_status'], reviewed['review_notes']), ('shortlisted', 'Keep me'))
 
