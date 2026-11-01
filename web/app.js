@@ -16,6 +16,8 @@ function toast(message,error=false){const box=$('#toast');box.textContent=messag
 function report(error){toast(error.message || 'Something went wrong.',true);}
 function shortDate(value){if(!value)return 'Not yet';const date=new Date(value);return Number.isNaN(date.valueOf())?value:date.toLocaleDateString(undefined,{month:'short',day:'numeric'});}
 function salary(job){if(job.salary_text)return job.salary_text;if(job.salary_min!=null||job.salary_max!=null){const fmt=n=>n==null?'':Number(n).toLocaleString();return `${job.salary_currency||''} ${fmt(job.salary_min)}${job.salary_max!=null?' – '+fmt(job.salary_max):'+'}${job.salary_period?' / '+job.salary_period:''}`.trim();}return '';}
+function posted(job){return job.published_at?`Posted ${shortDate(job.published_at)}`:`Posting date not listed · found ${shortDate(job.first_seen_at)}`;}
+function fitBadge(score){if(score==null)return '';const tone=score>=75?'high':score>=55?'mid':'low';return `<span class="fit-badge fit-${tone}" title="Fit score from 1 to 100">${esc(score)}</span>`;}
 function pill(status){return `<span class="status-pill tone-${esc(status)}">${esc(statuses[status]||status)}</span>`;}
 function profileReady(){const p=state.profile.profile;return Boolean(p.roles?.length||p.skills?.length||p.about||p.headline);}
 async function refresh(render=true){
@@ -66,9 +68,11 @@ function filteredJobs(){return state.jobs.filter(j=>{
 function card(job){
   const details=[job.location_text,salary(job)].filter(Boolean);
   return `<article class="job-card" draggable="true" data-job="${esc(job.id)}">
-    <button class="card-open" data-open-job="${esc(job.id)}">${esc(job.title)}</button>
+    <div class="card-head"><button class="card-open" data-open-job="${esc(job.id)}">${esc(job.title)}</button>${fitBadge(job.fit_score)}</div>
     <div class="card-company">${esc(job.company)}</div>
-    ${details.length?`<div class="card-details">${details.map(d=>`<div>${esc(d)}</div>`).join('')}</div>`:''}
+    <div class="card-posted">${esc(posted(job))}</div>
+    ${job.summary?`<p class="card-summary">${esc(job.summary)}</p>`:''}
+    ${details.length&&!job.summary?`<div class="card-details">${details.map(d=>`<div>${esc(d)}</div>`).join('')}</div>`:''}
     ${job.review_tags?.length?`<div class="card-tags">${job.review_tags.slice(0,3).map(t=>`<span class="mini-tag">${esc(t)}</span>`).join('')}</div>`:''}
     <div class="card-footer"><span class="review-state ${job.reviewed_at?'is-reviewed':''}">${job.reviewed_at?'Reviewed':'Not reviewed'}</span>${job.review_notes?'<span>Notes</span>':''}${job.comment_count?`<span>${job.comment_count} ${job.comment_count===1?'comment':'comments'}</span>`:''}</div>
   </article>`;
@@ -76,7 +80,7 @@ function card(job){
 function renderJobs(){
   const jobs=filteredJobs();$('#view-count').textContent=jobs.length;
   if(state.layout==='list'){
-    $('#job-content').innerHTML=jobs.length?`<div class="table-wrap"><table class="jobs-table"><thead><tr><th>Job</th><th>Company</th><th>Status</th><th>Location</th><th>Review</th><th>Comments</th></tr></thead><tbody>${jobs.map(j=>`<tr><td><button class="table-title" data-open-job="${esc(j.id)}">${esc(j.title)}</button></td><td>${esc(j.company)}</td><td>${pill(j.review_status)}</td><td>${esc(j.location_text||'Not specified')}</td><td>${j.reviewed_at?'Reviewed':'Not reviewed'}</td><td>${j.comment_count||'—'}</td></tr>`).join('')}</tbody></table></div>`:`<div class="no-results">${state.jobs.length?'No jobs match these filters.':'No jobs yet. Add a job or search with Claude.'}</div>`;
+    $('#job-content').innerHTML=jobs.length?`<div class="table-wrap"><table class="jobs-table"><thead><tr><th>Fit</th><th>Job</th><th>Company</th><th>Posted</th><th>Status</th><th>Location</th><th>Review</th><th>Comments</th></tr></thead><tbody>${jobs.map(j=>`<tr><td>${fitBadge(j.fit_score)||'—'}</td><td><button class="table-title" data-open-job="${esc(j.id)}">${esc(j.title)}</button></td><td>${esc(j.company)}</td><td>${j.published_at?esc(shortDate(j.published_at)):'—'}</td><td>${pill(j.review_status)}</td><td>${esc(j.location_text||'Not specified')}</td><td>${j.reviewed_at?'Reviewed':'Not reviewed'}</td><td>${j.comment_count||'—'}</td></tr>`).join('')}</tbody></table></div>`:`<div class="no-results">${state.jobs.length?'No jobs match these filters.':'No jobs yet. Add a job or search with Claude.'}</div>`;
   }else{
     const columns=state.view==='shortlisted'?['shortlisted']:state.view==='closed'?['rejected','archived']:['new','shortlisted','applied','interviewing','offer',...(['rejected','archived'].filter(s=>jobs.some(j=>j.review_status===s)))];
     $('#job-content').innerHTML=`${state.jobs.length&&jobs.length===0?'<p class="filter-empty" role="status">No jobs match these filters.</p>':''}<div class="board" aria-label="Job application board">${columns.map(status=>{const lane=jobs.filter(j=>j.review_status===status);return `<section class="column" data-column="${status}" aria-label="${statuses[status]} column"><div class="column-heading">${pill(status)}<span class="column-count">${lane.length}</span><button class="text-button column-add" data-add-status="${status}" aria-label="Add job to ${statuses[status]}">+</button></div><div class="column-body">${lane.map(card).join('')}<button class="new-card" data-add-status="${status}">+ New</button></div></section>`;}).join('')}</div>${state.jobs.length===0?'<p class="empty-board-hint">Add a job to get started, or use Search with Claude to collect listings.</p>':''}`;
@@ -102,12 +106,14 @@ function renderDetail(){
   const job=state.detail,r=job.review;
   const property=(name,value)=>`<div class="property-row"><span class="property-label">${name}</span><span class="property-value">${esc(value||'Not specified')}</span></div>`;
   $('#job-detail').innerHTML=`<div class="drawer-toolbar"><span>Job details</span><button class="text-button" id="close-job" aria-label="Close job details">Close</button></div>
-    <div class="drawer-content"><div class="detail-company">${esc(job.company)}</div><h2 class="detail-title">${esc(job.title)}</h2>
+    <div class="drawer-content"><div class="detail-company">${esc(job.company)}</div><h2 class="detail-title">${esc(job.title)}</h2><div class="detail-posted">${esc(posted(job))}</div>
     <div class="detail-actions"><select id="detail-status" aria-label="Job status">${Object.entries(statuses).map(([k,v])=>`<option value="${k}" ${r.status===k?'selected':''}>${v}</option>`).join('')}</select><button class="button ${r.reviewed_at?'reviewed-button':''}" id="mark-reviewed" aria-pressed="${Boolean(r.reviewed_at)}">${r.reviewed_at?'Reviewed':'Mark reviewed'}</button><a class="button" href="${esc(job.canonical_url)}" target="_blank" rel="noopener noreferrer">Open listing</a></div>
     <div class="detail-properties">${property('Location',job.location_text)}${property('Compensation',salary(job))}${property('Work setup',job.remote_status==='unknown'?'Not specified':job.remote_status)}${property('Employment',job.employment_type?.replaceAll('_',' '))}${property('Eligibility',job.eligible_countries?.join(', ')||job.timezone_requirements)}</div>
+    ${job.assessment?`<section class="detail-section fit-section"><div class="fit-heading">${fitBadge(job.assessment.fit_score)}<h3>Why you fit</h3></div><p class="fit-reason">${esc(job.assessment.fit_reason)}</p></section>
+    <section class="detail-section"><h3>In short</h3><div class="description">${esc(job.assessment.summary)}</div></section>`:''}
     <section class="detail-section"><div class="section-title-row"><h3>Your notes</h3><span class="save-label" id="note-save-state">Saved automatically</span></div><textarea class="detail-notes" id="job-notes" aria-label="Your notes for this job" placeholder="Add notes…">${esc(r.notes)}</textarea></section>
     <section class="detail-section"><h3>Comments <span class="optional">${job.comments.length}</span></h3><div id="comments">${job.comments.map(c=>`<div class="comment"><div class="comment-meta"><strong>${esc(state.profile.profile.name||'You')}</strong><span>${shortDate(c.created_at)}</span><button class="text-button" data-delete-comment="${esc(c.id)}" aria-label="Delete comment">Delete</button></div><div class="comment-body">${esc(c.body)}</div></div>`).join('')}</div><form id="comment-form" class="comment-compose"><textarea id="comment-input" aria-label="Write a comment" placeholder="Write a comment…" maxlength="10000" required></textarea><div class="comment-compose-footer"><button class="button small" type="submit">Add comment</button></div></form></section>
-    <section class="detail-section"><h3>Job description</h3><div class="description ${!job.description?'empty':''}">${esc(job.description||'No description saved. Open the listing to read more.')}</div></section>
+    ${job.assessment&&job.description?`<details class="detail-section full-description"><summary>Full original description</summary><div class="description">${esc(job.description)}</div></details>`:`<section class="detail-section"><h3>Job description</h3><div class="description ${!job.description?'empty':''}">${esc(job.description||'No description saved. Open the listing to read more.')}</div></section>`}
     ${job.sources.length?`<section class="detail-section"><h3>Sources</h3>${job.sources.map(s=>`<div class="source-evidence"><a href="${esc(s.source_url)}" target="_blank" rel="noopener noreferrer">${esc(s.name)}</a>${s.evidence?`<p>${esc(s.evidence)}</p>`:''}<div>Last checked ${shortDate(s.retrieved_at)}</div></div>`).join('')}</section>`:''}
     <div class="detail-bottom"><span>Added ${shortDate(job.first_seen_at)}</span><span>${r.reviewed_at?'Reviewed '+shortDate(r.reviewed_at):'Not reviewed'}</span></div></div>`;
   $('#close-job').onclick=()=>closeJob().catch(report);

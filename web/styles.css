@@ -85,6 +85,18 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; line-height: 1.2; letter-spac
 .job-card:hover { background: #fdfdfc; border-color: #d5d5d1; }
 .card-open { padding: 0; text-align: left; font-size: 14px; line-height: 1.4; font-weight: 600; display: block; width: 100%; }
 .card-company { font-size: 12px; color: #787774; margin-top: 5px; line-height: 1.4; }
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.card-posted { font-size: 11px; color: #9b9a97; margin-top: 2px; }
+.card-summary { font-size: 12px; line-height: 1.5; color: #37352f; margin: 8px 0 0; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.fit-badge { flex: none; display: inline-block; min-width: 30px; text-align: center; font-size: 12px; font-weight: 600; line-height: 1; padding: 5px 6px; border-radius: 4px; font-variant-numeric: tabular-nums; }
+.fit-high { background: #dbeddb; color: #1c6b3a; }
+.fit-mid { background: #fbecdd; color: #8a4b0f; }
+.fit-low { background: #f1f1ef; color: #6b6a66; }
+.detail-posted { font-size: 13px; color: #787774; margin: -14px 0 20px; }
+.fit-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.fit-heading h3 { margin: 0; }
+.fit-reason { font-size: 13px; line-height: 1.7; margin: 0; }
+.full-description summary { cursor: pointer; font-size: 14px; font-weight: 600; margin-bottom: 12px; }
 .card-details { font-size: 11px; line-height: 1.7; color: #787774; margin-top: 10px; }
 .card-footer { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 10px; color: #9b9a97; margin-top: 12px; padding-top: 9px; border-top: 1px solid #f1f1ef; }
 .review-state { color: #787774; }

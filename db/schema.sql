@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS job_comments (
 );
 CREATE INDEX IF NOT EXISTS comments_job ON job_comments(job_id, created_at);
 
+-- Claude's fit assessment against the saved profile; separate from job facts and the user's review.
+CREATE TABLE IF NOT EXISTS job_assessments (
+    job_id TEXT PRIMARY KEY REFERENCES jobs(id),
+    fit_score INTEGER NOT NULL CHECK (fit_score BETWEEN 1 AND 100),
+    fit_reason TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    profile_version INTEGER NOT NULL,
+    assessed_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS jobs_last_seen ON jobs(last_seen_at);
 CREATE INDEX IF NOT EXISTS jobs_remote ON jobs(remote_status);
 CREATE INDEX IF NOT EXISTS sightings_job ON sightings(job_id);

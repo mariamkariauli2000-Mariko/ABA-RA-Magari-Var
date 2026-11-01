@@ -164,6 +164,25 @@ class JobStorageTests(unittest.TestCase):
             self.assertEqual(backup.execute('SELECT count(*) FROM jobs').fetchone()[0], 65)
             self.assertEqual(backup.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
 
+    def test_assessments_are_validated_and_sort_listing(self):
+        run = self.start()
+        self.ingest(run, [self.job('1'), self.job('2')])
+        low, high = sorted(job['id'] for job in self.call('list'))
+        self.call('review', low, '--status', 'shortlisted', '--notes', 'Keep me')
+        error = self.call('assess', '--file', '-', ok=False,
+                          payload=[{'job_id': high, 'fit_score': 101, 'fit_reason': 'x', 'summary': 'y'}])
+        self.assertIn('1 to 100', error['error'])
+        self.assertEqual(self.sql('SELECT count(*) FROM job_assessments'), [(0,)])
+        saved = self.call('assess', '--file', '-', payload=[
+            {'job_id': low, 'fit_score': 40, 'fit_reason': 'Partial match.', 'summary': 'Short.'},
+            {'job_id': high, 'fit_score': 90, 'fit_reason': 'Strong match.', 'summary': 'Short too.'}])
+        self.assertEqual(saved['assessed'], 2)
+        listed = self.call('list')
+        self.assertEqual([job['id'] for job in listed], [high, low])
+        self.assertEqual(listed[0]['fit_reason'], 'Strong match.')
+        reviewed = next(job for job in listed if job['id'] == low)
+        self.assertEqual((reviewed['review_status'], reviewed['review_notes']), ('shortlisted', 'Keep me'))
+
     def test_parallel_imports_do_not_create_duplicates(self):
         run = self.start()
         with ThreadPoolExecutor(max_workers=4) as pool:

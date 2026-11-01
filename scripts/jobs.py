@@ -111,6 +111,31 @@ def update_review(db, job_id, *, status=None, notes=None, tags=None, reviewed=No
     return decode_row(require_row(db, 'reviews', 'job_id', job_id))
 
 
+def save_assessments(db, records):
+    if not isinstance(records, list) or not records:
+        raise ValueError('Assessments must be a nonempty array')
+    rows = []
+    for record in records:
+        if not isinstance(record, dict) or set(record) != {'job_id', 'fit_score', 'fit_reason', 'summary'}:
+            raise ValueError('Each assessment needs exactly job_id, fit_score, fit_reason and summary')
+        score = record['fit_score']
+        if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 100:
+            raise ValueError('fit_score must be a whole number from 1 to 100')
+        for key, limit in (('fit_reason', 2000), ('summary', 3000)):
+            if not isinstance(record[key], str) or not record[key].strip() or len(record[key]) > limit:
+                raise ValueError(f'{key} must be nonempty text, at most {limit} characters')
+        rows.append((record['job_id'], score, record['fit_reason'].strip(), record['summary'].strip()))
+    with write_transaction(db):
+        version, timestamp = get_profile(db)['version'], now()
+        for job_id, score, reason, summary in rows:
+            require_row(db, 'jobs', 'id', job_id)
+            db.execute('''INSERT INTO job_assessments VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET
+                          fit_score = excluded.fit_score, fit_reason = excluded.fit_reason, summary = excluded.summary,
+                          profile_version = excluded.profile_version, assessed_at = excluded.assessed_at''',
+                       (job_id, score, reason, summary, version, timestamp))
+    return {'assessed': len(rows), 'profile_version': version}
+
+
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='microseconds')
 
@@ -301,9 +326,12 @@ def list_jobs(db, args):
     where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
     rows = db.execute('''SELECT j.*, COALESCE(r.status, 'new') AS review_status,
                          COALESCE(r.notes, '') AS review_notes, COALESCE(r.tags_json, '[]') AS review_tags_json,
-                         r.reviewed_at, (SELECT count(*) FROM job_comments c WHERE c.job_id = j.id) AS comment_count
-                         FROM jobs j LEFT JOIN reviews r ON j.id = r.job_id''' + where +
-                      ' ORDER BY j.first_seen_at DESC, j.id LIMIT ? OFFSET ?', (*params, args.limit, args.offset)).fetchall()
+                         r.reviewed_at, (SELECT count(*) FROM job_comments c WHERE c.job_id = j.id) AS comment_count,
+                         a.fit_score, a.fit_reason, a.summary
+                         FROM jobs j LEFT JOIN reviews r ON j.id = r.job_id
+                         LEFT JOIN job_assessments a ON j.id = a.job_id''' + where +
+                      ' ORDER BY a.fit_score IS NULL, a.fit_score DESC, j.first_seen_at DESC, j.id LIMIT ? OFFSET ?',
+                      (*params, args.limit, args.offset)).fetchall()
     return [decode_row(row) for row in rows]
 
 
@@ -375,6 +403,9 @@ def execute(db, args):
         return ingest(db, args.run, args.source, json.loads(content))
     if args.command == 'list':
         return list_jobs(db, args)
+    if args.command == 'assess':
+        content = sys.stdin.read() if args.file == '-' else Path(args.file).read_text()
+        return save_assessments(db, json.loads(content))
     if args.command == 'review':
         if args.status is None and args.notes is None and args.tag is None and args.reviewed is None:
             raise ValueError('Supply --status, --notes, --tag, or --reviewed')
@@ -408,7 +439,7 @@ def execute(db, args):
                 writer.writerow({k: "'" + v if isinstance(v, str) and v.lstrip().startswith(('=', '+', '-', '@')) else v for k, v in cells.items()})
     else:
         snapshot = {table: [decode_row(row) for row in db.execute(f'SELECT * FROM {table}')]
-                    for table in ('sources', 'search_runs', 'run_sources', 'jobs', 'sightings', 'reviews', 'profiles', 'job_comments')}
+                    for table in ('sources', 'search_runs', 'run_sources', 'jobs', 'sightings', 'reviews', 'profiles', 'job_comments', 'job_assessments')}
         count = len(snapshot['jobs'])
         with target.open('x') as handle:
             json.dump({'schema_version': 2, 'exported_at': now(), **snapshot}, handle, ensure_ascii=False, indent=2)
@@ -477,6 +508,8 @@ def parser():
     review.add_argument('--notes')
     review.add_argument('--reviewed', type=int, choices=(0, 1))
     review.add_argument('--tag', action='append', help='Replaces all tags with the supplied repeated --tag values')
+    assess = sub.add_parser('assess', help='Save fit scores, reasons and short summaries')
+    assess.add_argument('--file', required=True, help='JSON array of {job_id, fit_score, fit_reason, summary}, or - for stdin')
     sub.add_parser('stats')
     for command in ('export', 'backup'):
         output = sub.add_parser(command)
@@ -499,6 +532,9 @@ def main():
             raise ValueError(f'Unsupported or uninitialized database schema: {version}')
         db.execute('PRAGMA foreign_keys = ON')
         db.execute('PRAGMA journal_mode = WAL')
+        if version == 2:
+            # Idempotent: adds tables introduced after a database was created.
+            db.executescript((ROOT / 'db' / 'schema.sql').read_text())
         emit(execute(db, args))
     finally:
         db.close()
