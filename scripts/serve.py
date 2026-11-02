@@ -37,7 +37,7 @@ def detail(db, job_id):
     result = storage.decode_row(row)
     review = db.execute('SELECT * FROM reviews WHERE job_id = ?', (job_id,)).fetchone()
     result['review'] = storage.decode_row(review) if review else {'status': 'new', 'notes': '', 'tags': [], 'reviewed_at': None}
-    assessment = db.execute('SELECT fit_score, fit_reason, summary, assessed_at FROM job_assessments WHERE job_id = ?', (job_id,)).fetchone()
+    assessment = db.execute('SELECT fit_score, fit_reason, summary, apply_tips, assessed_at FROM job_assessments WHERE job_id = ?', (job_id,)).fetchone()
     result['assessment'] = dict(assessment) if assessment else None
     result['comments'] = [dict(r) for r in db.execute('SELECT * FROM job_comments WHERE job_id = ? ORDER BY created_at', (job_id,))]
     result['sources'] = [dict(r) for r in db.execute('''SELECT s.name, si.source_url, si.evidence, max(si.retrieved_at) AS retrieved_at

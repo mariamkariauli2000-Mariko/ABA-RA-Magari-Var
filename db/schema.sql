@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS job_assessments (
     fit_score INTEGER NOT NULL CHECK (fit_score BETWEEN 1 AND 100),
     fit_reason TEXT NOT NULL,
     summary TEXT NOT NULL,
+    apply_tips TEXT,
     profile_version INTEGER NOT NULL,
     assessed_at TEXT NOT NULL
 );

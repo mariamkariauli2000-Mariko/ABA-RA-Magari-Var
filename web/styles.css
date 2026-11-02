@@ -87,11 +87,15 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; line-height: 1.2; letter-spac
 .card-company { font-size: 12px; color: #787774; margin-top: 5px; line-height: 1.4; }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .card-posted { font-size: 11px; color: #9b9a97; margin-top: 2px; }
+.card-salary { font-size: 12px; font-weight: 600; color: #37352f; margin-top: 6px; }
+.card-salary.is-missing { font-weight: 400; color: #8a4b0f; }
 .card-summary { font-size: 12px; line-height: 1.5; color: #37352f; margin: 8px 0 0; }
 .fit-checks { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; font-size: 12px; line-height: 1.45; }
 .check-plus { color: #1c6b3a; }
 .check-minus { color: #8a4b0f; }
 .check-block { color: #b3261e; font-weight: 600; }
+.apply-tips { list-style: none; margin: 8px 0 0; padding: 8px 0 0; border-top: 1px dashed #e6e6e3; display: grid; gap: 2px; font-size: 12px; line-height: 1.45; color: #1f5f9e; }
+.detail-section .apply-tips { border-top: 0; padding-top: 0; font-size: 13px; }
 .fit-summary { font-size: 13px; line-height: 1.6; margin: 0; }
 .fit-badge { flex: none; display: inline-block; min-width: 30px; text-align: center; font-size: 12px; font-weight: 600; line-height: 1; padding: 5px 6px; border-radius: 4px; font-variant-numeric: tabular-nums; }
 .fit-high { background: #dbeddb; color: #1c6b3a; }

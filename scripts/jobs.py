@@ -116,8 +116,8 @@ def save_assessments(db, records):
         raise ValueError('Assessments must be a nonempty array')
     rows = []
     for record in records:
-        if not isinstance(record, dict) or set(record) != {'job_id', 'fit_score', 'fit_reason', 'summary'}:
-            raise ValueError('Each assessment needs exactly job_id, fit_score, fit_reason and summary')
+        if not isinstance(record, dict) or set(record) != {'job_id', 'fit_score', 'fit_reason', 'summary', 'apply_tips'}:
+            raise ValueError('Each assessment needs exactly job_id, fit_score, fit_reason, summary and apply_tips')
         score = record['fit_score']
         if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 100:
             raise ValueError('fit_score must be a whole number from 1 to 100')
@@ -130,15 +130,20 @@ def save_assessments(db, records):
             raise ValueError('fit_reason must be 1-3 lines, each starting with "+ ", "− " or "✕ " and at most 90 characters')
         if '\n' in record['summary'].strip():
             raise ValueError('summary must be a single line')
-        rows.append((record['job_id'], score, record['fit_reason'].strip(), record['summary'].strip()))
+        tips = record['apply_tips'].strip().splitlines() if isinstance(record['apply_tips'], str) else []
+        if not 1 <= len(tips) <= 3 or any(not line.startswith('→ ') or len(line) > 90 for line in tips):
+            raise ValueError('apply_tips must be 1-3 lines, each starting with "→ " and at most 90 characters')
+        rows.append((record['job_id'], score, record['fit_reason'].strip(), record['summary'].strip(), '\n'.join(tips)))
     with write_transaction(db):
         version, timestamp = get_profile(db)['version'], now()
-        for job_id, score, reason, summary in rows:
+        for job_id, score, reason, summary, tips in rows:
             require_row(db, 'jobs', 'id', job_id)
-            db.execute('''INSERT INTO job_assessments VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET
+            db.execute('''INSERT INTO job_assessments(job_id, fit_score, fit_reason, summary, apply_tips, profile_version, assessed_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET
                           fit_score = excluded.fit_score, fit_reason = excluded.fit_reason, summary = excluded.summary,
-                          profile_version = excluded.profile_version, assessed_at = excluded.assessed_at''',
-                       (job_id, score, reason, summary, version, timestamp))
+                          apply_tips = excluded.apply_tips, profile_version = excluded.profile_version,
+                          assessed_at = excluded.assessed_at''',
+                       (job_id, score, reason, summary, tips, version, timestamp))
     return {'assessed': len(rows), 'profile_version': version}
 
 
@@ -203,11 +208,19 @@ def add_source(db, name, url, kind, method='discover', notes=''):
     return source_id
 
 
+def add_missing_columns(db):
+    columns = {row[1] for row in db.execute('PRAGMA table_info(job_assessments)')}
+    if 'apply_tips' not in columns:
+        db.execute('ALTER TABLE job_assessments ADD COLUMN apply_tips TEXT')
+        db.commit()
+
+
 def initialize(db):
     version = db.execute('PRAGMA user_version').fetchone()[0]
     if version == 1:
         db.executescript((ROOT / 'db' / 'migrations' / '002_profiles_and_reviews.sql').read_text())
     db.executescript((ROOT / 'db' / 'schema.sql').read_text())
+    add_missing_columns(db)
     seed_file = ROOT / 'remote-job-links.md'
     kind = 'discovery'
     with write_transaction(db):
@@ -333,7 +346,7 @@ def list_jobs(db, args):
     rows = db.execute('''SELECT j.*, COALESCE(r.status, 'new') AS review_status,
                          COALESCE(r.notes, '') AS review_notes, COALESCE(r.tags_json, '[]') AS review_tags_json,
                          r.reviewed_at, (SELECT count(*) FROM job_comments c WHERE c.job_id = j.id) AS comment_count,
-                         a.fit_score, a.fit_reason, a.summary
+                         a.fit_score, a.fit_reason, a.summary, a.apply_tips
                          FROM jobs j LEFT JOIN reviews r ON j.id = r.job_id
                          LEFT JOIN job_assessments a ON j.id = a.job_id''' + where +
                       ' ORDER BY a.fit_score IS NULL, a.fit_score DESC, j.first_seen_at DESC, j.id LIMIT ? OFFSET ?',
@@ -539,8 +552,9 @@ def main():
         db.execute('PRAGMA foreign_keys = ON')
         db.execute('PRAGMA journal_mode = WAL')
         if version == 2:
-            # Idempotent: adds tables introduced after a database was created.
+            # Idempotent: adds tables and columns introduced after a database was created.
             db.executescript((ROOT / 'db' / 'schema.sql').read_text())
+            add_missing_columns(db)
         emit(execute(db, args))
     finally:
         db.close()

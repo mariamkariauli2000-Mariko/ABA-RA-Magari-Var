@@ -144,11 +144,19 @@ After saving jobs, score each one against the saved profile with
 reading time, so write signal, never prose:
 
 - `summary`: one line, at most 200 characters, facts separated by ` · `:
-  what the job is, where (location/time zone), contract, pay, the one hard
-  requirement, deadline. Write `Pay n/a` rather than omitting pay.
+  what the job is, where (location/time zone), contract, the one hard
+  requirement, deadline. Leave pay out: the board shows salary from the
+  job's own fields and says "Salary not listed" when there is none. So at
+  collection time, put any stated pay (figures, or structure such as
+  "base + commission") in `salary_text`.
 - `fit_reason`: 1-3 lines, each at most 90 characters, starting with
   `+ ` (match), `− ` (gap) or `✕ ` (blocker: required language, residence,
   certification, or years far above the profile).
+- `apply_tips`: 1-3 lines, each at most 90 characters, starting with `→ `.
+  Only job-specific actions: what to lead with from the profile, what to
+  confirm first (eligibility, relocation, pay structure), hard steps
+  (pre-screeners, email format, deadline). A blocked job gets one
+  `→ Skip: <reason>` line. No generic advice ("tailor your CV").
 - No company marketing, adjectives, filler or full sentences. A blocker
   caps the score below 20. The helper rejects anything longer.
 
