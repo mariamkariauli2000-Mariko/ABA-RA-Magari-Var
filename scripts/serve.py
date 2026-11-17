@@ -37,6 +37,8 @@ def detail(db, job_id):
     result = storage.decode_row(row)
     review = db.execute('SELECT * FROM reviews WHERE job_id = ?', (job_id,)).fetchone()
     result['review'] = storage.decode_row(review) if review else {'status': 'new', 'notes': '', 'tags': [], 'reviewed_at': None}
+    assessment = db.execute('SELECT fit_score, fit_reason, summary, apply_tips, assessed_at FROM job_assessments WHERE job_id = ?', (job_id,)).fetchone()
+    result['assessment'] = dict(assessment) if assessment else None
     result['comments'] = [dict(r) for r in db.execute('SELECT * FROM job_comments WHERE job_id = ? ORDER BY created_at', (job_id,))]
     result['sources'] = [dict(r) for r in db.execute('''SELECT s.name, si.source_url, si.evidence, max(si.retrieved_at) AS retrieved_at
                           FROM sightings si JOIN sources s ON s.id = si.source_id WHERE si.job_id = ?
@@ -131,7 +133,8 @@ class Handler(BaseHTTPRequestHandler):
             data = {}
             if self.command != 'GET':
                 if self.headers.get('X-Workspace-Token') != self.server.token:
-                    self.send(403, {'error': 'Refresh this workspace before making changes.'})
+                    # The token changes on every server start; the page uses this code to fetch the new one and retry.
+                    self.send(403, {'error': 'Refresh this workspace before making changes.', 'code': 'stale_token'})
                     return
                 origin = self.headers.get('Origin')
                 if origin and origin not in {f'http://{host}' for host in allowed}:
@@ -193,6 +196,21 @@ class Handler(BaseHTTPRequestHandler):
                 return
         if path == '/api/jobs' and method == 'POST':
             self.send(201, create_manual_job(db, data))
+            return
+        if path == '/api/reviews/bulk' and method == 'POST':
+            # Same change for several selected cards: status and/or reviewed state only.
+            ids = data.get('job_ids')
+            if not isinstance(ids, list) or not ids or len(ids) > 1000 or any(not isinstance(i, str) for i in ids):
+                raise ValueError('Select between 1 and 1000 jobs')
+            changes = {k: v for k, v in data.items() if k != 'job_ids'}
+            if not changes or set(changes) - {'status', 'reviewed'}:
+                raise ValueError('Supply status, reviewed, or both')
+            ids = list(dict.fromkeys(ids))
+            for job_id in ids:  # check every job before changing any
+                storage.require_row(db, 'jobs', 'id', job_id)
+            for job_id in ids:
+                storage.update_review(db, job_id, **changes)
+            self.send(200, {'updated': len(ids)})
             return
         parts = path.strip('/').split('/')
         if len(parts) >= 3 and parts[:2] == ['api', 'jobs']:

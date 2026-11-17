@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     employer_job_id TEXT,
     availability TEXT NOT NULL DEFAULT 'unknown'
         CHECK (availability IN ('open', 'closed', 'unknown')),
+    application_deadline TEXT,  -- last day to apply, YYYY-MM-DD
+    deadline_text TEXT,         -- posting's own wording, or 'Not listed' once checked
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
     CHECK (salary_min IS NULL OR salary_max IS NULL OR salary_min <= salary_max)
@@ -94,6 +96,17 @@ CREATE TABLE IF NOT EXISTS job_comments (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS comments_job ON job_comments(job_id, created_at);
+
+-- Claude's fit assessment against the saved profile; separate from job facts and the user's review.
+CREATE TABLE IF NOT EXISTS job_assessments (
+    job_id TEXT PRIMARY KEY REFERENCES jobs(id),
+    fit_score INTEGER NOT NULL CHECK (fit_score BETWEEN 1 AND 100),
+    fit_reason TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    apply_tips TEXT,
+    profile_version INTEGER NOT NULL,
+    assessed_at TEXT NOT NULL
+);
 
 CREATE INDEX IF NOT EXISTS jobs_last_seen ON jobs(last_seen_at);
 CREATE INDEX IF NOT EXISTS jobs_remote ON jobs(remote_status);

@@ -79,6 +79,23 @@ class DashboardTests(unittest.TestCase):
         with serve.connect(self.database) as db:
             self.assertEqual(db.execute('SELECT notes FROM reviews WHERE job_id = ?', (job_id,)).fetchone()[0], 'Ask about timezone overlap.')
 
+    def test_bulk_review_changes_every_selected_job_and_keeps_notes(self):
+        first = self.add_job()['id']
+        second = self.request('/api/jobs', 'POST', {'job': {'title': 'Ops Lead', 'company': 'Example Company',
+                              'source_url': 'https://example.invalid/jobs/2'}}, expect=201)['id']
+        self.request(f'/api/jobs/{first}/review', 'PATCH', {'notes': 'Keep this note.'})
+        self.assertEqual(self.request('/api/reviews/bulk', 'POST', {'job_ids': [first, second, first], 'status': 'archived'})['updated'], 2)
+        jobs = {j['id']: j for j in self.request('/api/state')['jobs']}
+        self.assertEqual({j['review_status'] for j in jobs.values()}, {'archived'})
+        self.assertEqual(jobs[first]['review_notes'], 'Keep this note.')
+        self.request('/api/reviews/bulk', 'POST', {'job_ids': [first, second], 'status': 'new', 'reviewed': False})
+        self.assertEqual([j['reviewed_at'] for j in self.request('/api/state')['jobs']], [None, None])
+        # One unknown ID rejects the whole change; nothing is half-applied.
+        self.request('/api/reviews/bulk', 'POST', {'job_ids': [first, 'job_missing'], 'status': 'shortlisted'}, expect=400)
+        self.assertEqual({j['review_status'] for j in self.request('/api/state')['jobs']}, {'new'})
+        self.request('/api/reviews/bulk', 'POST', {'job_ids': [first], 'notes': 'x'}, expect=400)
+        self.request('/api/reviews/bulk', 'POST', {'job_ids': []}, expect=400)
+
     def test_saved_profile_is_captured_by_next_search_and_not_retroactive(self):
         original = self.request('/api/profile')
         self.assertEqual(original['version'], 0)
@@ -99,7 +116,8 @@ class DashboardTests(unittest.TestCase):
         self.request('/api/profile', 'PUT', {'profile': {'salary_min': -1}}, expect=400)
 
     def test_untrusted_web_origins_and_invalid_writes_are_rejected(self):
-        self.request('/api/jobs', 'POST', {}, token=False, expect=403)
+        rejected = self.request('/api/jobs', 'POST', {}, token=False, expect=403)
+        self.assertEqual(rejected['code'], 'stale_token')
         self.request('/api/jobs', 'POST', {}, origin='https://example.invalid', expect=403)
         self.request('/api/jobs', 'POST', {'job': {'title': 'Missing URL'}}, expect=400)
         self.assertEqual(self.request('/api/state')['jobs'], [])

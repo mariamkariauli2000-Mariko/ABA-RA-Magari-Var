@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import uuid
 from contextlib import contextmanager
@@ -25,7 +25,10 @@ TEXT_FIELDS = (
     'title', 'company', 'description', 'location_text', 'timezone_requirements',
     'remote_status', 'employment_type', 'seniority', 'salary_currency',
     'salary_period', 'salary_text', 'published_at', 'employer_job_id', 'availability',
+    'application_deadline', 'deadline_text',
 )
+# deadline_text keeps the posting's own wording, or exactly this when the posting was checked and states none.
+DEADLINE_NOT_LISTED = 'Not listed'
 JOB_FIELDS = set(TEXT_FIELDS) | {
     'source_url', 'canonical_url', 'source_job_id', 'evidence',
     'eligible_countries', 'skills', 'salary_min', 'salary_max',
@@ -111,6 +114,42 @@ def update_review(db, job_id, *, status=None, notes=None, tags=None, reviewed=No
     return decode_row(require_row(db, 'reviews', 'job_id', job_id))
 
 
+def save_assessments(db, records):
+    if not isinstance(records, list) or not records:
+        raise ValueError('Assessments must be a nonempty array')
+    rows = []
+    for record in records:
+        if not isinstance(record, dict) or set(record) != {'job_id', 'fit_score', 'fit_reason', 'summary', 'apply_tips'}:
+            raise ValueError('Each assessment needs exactly job_id, fit_score, fit_reason, summary and apply_tips')
+        score = record['fit_score']
+        if isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 100:
+            raise ValueError('fit_score must be a whole number from 1 to 100')
+        # Signal, not prose: one fact line, and at most three short tagged checks.
+        for key, limit in (('fit_reason', 300), ('summary', 200)):
+            if not isinstance(record[key], str) or not record[key].strip() or len(record[key]) > limit:
+                raise ValueError(f'{key} must be nonempty text, at most {limit} characters')
+        checks = record['fit_reason'].strip().splitlines()
+        if len(checks) > 3 or any(not line.startswith(('+ ', '− ', '✕ ')) or len(line) > 90 for line in checks):
+            raise ValueError('fit_reason must be 1-3 lines, each starting with "+ ", "− " or "✕ " and at most 90 characters')
+        if '\n' in record['summary'].strip():
+            raise ValueError('summary must be a single line')
+        tips = record['apply_tips'].strip().splitlines() if isinstance(record['apply_tips'], str) else []
+        if not 1 <= len(tips) <= 3 or any(not line.startswith('→ ') or len(line) > 90 for line in tips):
+            raise ValueError('apply_tips must be 1-3 lines, each starting with "→ " and at most 90 characters')
+        rows.append((record['job_id'], score, record['fit_reason'].strip(), record['summary'].strip(), '\n'.join(tips)))
+    with write_transaction(db):
+        version, timestamp = get_profile(db)['version'], now()
+        for job_id, score, reason, summary, tips in rows:
+            require_row(db, 'jobs', 'id', job_id)
+            db.execute('''INSERT INTO job_assessments(job_id, fit_score, fit_reason, summary, apply_tips, profile_version, assessed_at)
+                          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(job_id) DO UPDATE SET
+                          fit_score = excluded.fit_score, fit_reason = excluded.fit_reason, summary = excluded.summary,
+                          apply_tips = excluded.apply_tips, profile_version = excluded.profile_version,
+                          assessed_at = excluded.assessed_at''',
+                       (job_id, score, reason, summary, tips, version, timestamp))
+    return {'assessed': len(rows), 'profile_version': version}
+
+
 def now():
     return datetime.now(timezone.utc).isoformat(timespec='microseconds')
 
@@ -172,19 +211,176 @@ def add_source(db, name, url, kind, method='discover', notes=''):
     return source_id
 
 
-def initialize(db):
+def add_missing_columns(db):
+    changed = False
+    columns = {row[1] for row in db.execute('PRAGMA table_info(job_assessments)')}
+    if 'apply_tips' not in columns:
+        db.execute('ALTER TABLE job_assessments ADD COLUMN apply_tips TEXT')
+        changed = True
+    columns = {row[1] for row in db.execute('PRAGMA table_info(jobs)')}
+    for column in ('application_deadline', 'deadline_text'):
+        if column not in columns:
+            db.execute(f'ALTER TABLE jobs ADD COLUMN {column} TEXT')
+            changed = True
+    if changed:
+        db.commit()
+
+
+def check_deadline(value):
+    """Deadlines are calendar dates (YYYY-MM-DD), the last day applications are accepted."""
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        raise ValueError('application_deadline must be a date like 2026-11-26')
+    date.fromisoformat(value)
+    return value
+
+
+def set_deadline(db, job_id, deadline=None, text=None, availability=None):
+    if deadline is None and text is None and availability is None:
+        raise ValueError('Supply --date, --text, or --availability')
+    changes = {}
+    if availability is not None:
+        if availability not in ('open', 'closed', 'unknown'):
+            raise ValueError('availability must be open, closed, or unknown')
+        changes['availability'] = availability
+    if deadline is not None:
+        changes['application_deadline'] = check_deadline(deadline.strip()) if deadline.strip() else None
+    if text is not None:
+        changes['deadline_text'] = text.strip() or None
+    with write_transaction(db):
+        require_row(db, 'jobs', 'id', job_id)
+        db.execute('UPDATE jobs SET ' + ', '.join(f'{k} = ?' for k in changes) + ' WHERE id = ?', (*changes.values(), job_id))
+    row = require_row(db, 'jobs', 'id', job_id)
+    return {k: row[k] for k in ('id', 'title', 'company', 'application_deadline', 'deadline_text', 'availability')}
+
+
+def feedback(db, since=None):
+    """The user's own comments and notes on jobs, newest first, for planning the next search."""
+    rows = db.execute('''SELECT * FROM (
+            SELECT c.created_at AS at, 'comment' AS kind, c.body AS text, j.id AS job_id, j.title, j.company, COALESCE(r.status, 'new') AS status
+              FROM job_comments c JOIN jobs j ON j.id = c.job_id LEFT JOIN reviews r ON r.job_id = j.id
+            UNION ALL
+            SELECT r.updated_at, 'note', r.notes, j.id, j.title, j.company, r.status
+              FROM reviews r JOIN jobs j ON j.id = r.job_id WHERE r.notes != '')
+          WHERE ? IS NULL OR at >= ? ORDER BY at DESC''', (since, since)).fetchall()
+    return [dict(row) for row in rows]
+
+
+# Company lists kept in the project. Their first columns describe the organisation; the
+# LIST_SOURCE_COLUMNS hold the source as saved in the database (page searched, on/off, notes),
+# written by `sources sync-lists` so a rebuilt database gets the same sources back.
+SOURCE_LISTS = (('edtech-careers.csv', 'company', 'vacancy_url'), ('startup-support-orgs.csv', 'name', 'website'),
+                ('b2b-saas-careers.csv', 'company', 'vacancy_url'))
+LIST_SOURCE_COLUMNS = ('source_name', 'searched_url', 'kind', 'method', 'enabled', 'source_notes')
+# Every other saved source (job boards, the original links, later additions), one row per source.
+OTHER_SOURCES = 'job-sources.csv'
+OTHER_SOURCE_COLUMNS = ('name', 'url', 'kind', 'method', 'enabled', 'notes')
+
+
+def read_source_list(path):
+    with path.open(newline='', encoding='utf-8') as handle:
+        reader = csv.DictReader(handle)
+        return list(reader.fieldnames or []), list(reader)
+
+
+def seed_lists(db, folder=ROOT):
+    """Add list entries that have no source yet; never change an existing source."""
+    other = folder / OTHER_SOURCES
+    for row in read_source_list(other)[1] if other.exists() else []:
+        source_id = add_source(db, row['name'], row['url'], row['kind'], method=row['method'] or 'discover', notes=row['notes'])
+        if row['enabled'] == '0' and db.execute('SELECT changes()').fetchone()[0]:
+            db.execute('UPDATE sources SET enabled = 0 WHERE id = ?', (source_id,))
+    for filename, name_column, url_column in SOURCE_LISTS:
+        path = folder / filename
+        if not path.exists():
+            continue
+        for row in read_source_list(path)[1]:
+            if list_row_source(db, row, name_column) is not None:
+                continue
+            url = row.get('searched_url') or row[url_column]
+            source_id = add_source(db, row.get('source_name') or row[name_column], url, row.get('kind') or 'company_careers',
+                                   method=row.get('method') or 'discover',
+                                   notes=row.get('source_notes') or f'Seeded from {filename}; collection method not yet verified.')
+            if row.get('enabled') == '0':
+                db.execute('UPDATE sources SET enabled = 0 WHERE id = ?', (source_id,))
+
+
+def comparable_url(url):
+    return normalize_url(url).lower().rstrip('/').replace('://www.', '://')
+
+
+def list_row_source(db, row, name_column):
+    """The saved source for a list entry: its searched page, its website noted on the source, or its name."""
+    sources = [dict(r) for r in db.execute('SELECT * FROM sources')]
+    urls = {comparable_url(u) for u in (row.get('searched_url'), row.get('vacancy_url'), row.get('website')) if u}
+    for source in sources:
+        if comparable_url(source['url']) in urls:
+            return source
+    website = row.get('website')
+    if website:
+        for source in sources:
+            noted = re.search(r'Website (\S+?)\.?(?:\s|$)', source['notes'] or '')
+            if noted and comparable_url(noted[1]) == comparable_url(website):
+                return source
+    if row.get('searched_url'):
+        return None  # the row records its own page; a name match could be another organisation (e.g. Remote vs Remote OK)
+    names ={n.lower() for n in (row.get('source_name'), row[name_column]) if n}
+    for source in sources:
+        if source['name'].lower() in names or any(source['name'].lower().startswith(n + ' ') for n in names):
+            return source
+    return None
+
+
+def sync_lists(db, folder=ROOT):
+    """Write each list entry's current source back into its CSV."""
+    result, listed = {}, set()
+    for filename, name_column, _ in SOURCE_LISTS:
+        path = folder / filename
+        if not path.exists():
+            continue
+        fields, rows = read_source_list(path)
+        fields = [f for f in fields if f not in LIST_SOURCE_COLUMNS] + list(LIST_SOURCE_COLUMNS)
+        missing = []
+        for row in rows:
+            source = list_row_source(db, row, name_column)
+            if source is None:
+                missing.append(row[name_column])
+                continue
+            listed.add(source['id'])
+            row.update(source_name=source['name'], searched_url=source['url'], kind=source['kind'],
+                       method=source['method'], enabled=str(source['enabled']), source_notes=source['notes'] or '')
+        temporary = path.with_suffix('.csv.tmp')
+        with temporary.open('w', newline='', encoding='utf-8') as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows({f: row.get(f, '') for f in fields} for row in rows)
+        temporary.replace(path)
+        result[filename] = {'rows': len(rows), 'without_source': missing}
+    other = [dict(r) for r in db.execute("SELECT * FROM sources WHERE kind != 'manual' ORDER BY name, url") if r['id'] not in listed]
+    temporary = folder / (OTHER_SOURCES + '.tmp')
+    with temporary.open('w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=OTHER_SOURCE_COLUMNS)
+        writer.writeheader()
+        writer.writerows({f: '' if row[f] is None else row[f] for f in OTHER_SOURCE_COLUMNS} for row in other)
+    temporary.replace(folder / OTHER_SOURCES)
+    result[OTHER_SOURCES] = {'rows': len(other)}
+    return result
+
+
+def initialize(db, folder=ROOT):
     version = db.execute('PRAGMA user_version').fetchone()[0]
     if version == 1:
         db.executescript((ROOT / 'db' / 'migrations' / '002_profiles_and_reviews.sql').read_text())
     db.executescript((ROOT / 'db' / 'schema.sql').read_text())
-    seed_file = ROOT / 'remote-job-links.md'
+    add_missing_columns(db)
+    seed_file = folder / 'remote-job-links.md'  # read after the CSVs, so saved settings win
     kind = 'discovery'
     with write_transaction(db):
+        seed_lists(db, folder)
         for line in seed_file.read_text().splitlines() if seed_file.exists() else []:
             if line.startswith('## '):
                 kind = {'Job boards': 'job_board', 'Company career pages': 'company_careers'}.get(line[3:], 'discovery')
             match = re.match(r'^- \[([^]]+)\]\((https?://[^)]+)\)', line)
-            if match:
+            if match and not db.execute('SELECT 1 FROM sources WHERE name = ?', (match[1],)).fetchone():
                 linkedin = urlsplit(match[2]).hostname in ('linkedin.com', 'www.linkedin.com')
                 method = 'manual' if linkedin else 'discover'
                 notes = ('LinkedIn: native alerts or user-provided listings; automated scraping is not configured.' if linkedin else
@@ -232,6 +428,8 @@ def normalize_job(record):
         raise ValueError('remote_status must be remote, hybrid, onsite, or unknown')
     if normalized.get('availability', 'unknown') not in ('open', 'closed', 'unknown'):
         raise ValueError('availability must be open, closed, or unknown')
+    if normalized.get('application_deadline'):
+        check_deadline(normalized['application_deadline'])
     if normalized.get('published_at'):
         datetime.fromisoformat(normalized['published_at'].replace('Z', '+00:00'))
     normalized['canonical_url'] = normalize_url(record.get('canonical_url') or record['source_url'])
@@ -301,9 +499,14 @@ def list_jobs(db, args):
     where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
     rows = db.execute('''SELECT j.*, COALESCE(r.status, 'new') AS review_status,
                          COALESCE(r.notes, '') AS review_notes, COALESCE(r.tags_json, '[]') AS review_tags_json,
-                         r.reviewed_at, (SELECT count(*) FROM job_comments c WHERE c.job_id = j.id) AS comment_count
-                         FROM jobs j LEFT JOIN reviews r ON j.id = r.job_id''' + where +
-                      ' ORDER BY j.first_seen_at DESC, j.id LIMIT ? OFFSET ?', (*params, args.limit, args.offset)).fetchall()
+                         r.reviewed_at, (SELECT count(*) FROM job_comments c WHERE c.job_id = j.id) AS comment_count,
+                         a.fit_score, a.fit_reason, a.summary, a.apply_tips,
+                         (SELECT group_concat(name, ' · ') FROM (SELECT DISTINCT s.name FROM sightings si
+                          JOIN sources s ON s.id = si.source_id WHERE si.job_id = j.id ORDER BY s.name)) AS source_names
+                         FROM jobs j LEFT JOIN reviews r ON j.id = r.job_id
+                         LEFT JOIN job_assessments a ON j.id = a.job_id''' + where +
+                      ' ORDER BY a.fit_score IS NULL, a.fit_score DESC, j.first_seen_at DESC, j.id LIMIT ? OFFSET ?',
+                      (*params, args.limit, args.offset)).fetchall()
     return [decode_row(row) for row in rows]
 
 
@@ -318,15 +521,18 @@ def execute(db, args):
     if args.command == 'sources':
         if args.action == 'list':
             return [dict(row) for row in db.execute('SELECT * FROM sources ORDER BY name')]
+        if args.action == 'sync-lists':
+            return sync_lists(db)
         with write_transaction(db):
             if args.action == 'add':
                 source_id = add_source(db, args.name, args.url, args.kind, args.method, args.notes)
             else:
                 source_id = args.id
                 require_row(db, 'sources', 'id', source_id)
-                updates = {k: v for k, v in {'method': args.method, 'notes': args.notes, 'enabled': args.enabled}.items() if v is not None}
+                updates = {k: v for k, v in {'name': args.name, 'url': args.url, 'kind': args.kind, 'method': args.method,
+                                             'notes': args.notes, 'enabled': args.enabled}.items() if v is not None}
                 if not updates:
-                    raise ValueError('Supply --method, --notes, or --enabled')
+                    raise ValueError('Supply --name, --url, --kind, --method, --notes, or --enabled')
                 db.execute('UPDATE sources SET ' + ', '.join(f'{k} = ?' for k in updates) + ' WHERE id = ?',
                            (*updates.values(), source_id))
         return dict(require_row(db, 'sources', 'id', source_id))
@@ -375,6 +581,13 @@ def execute(db, args):
         return ingest(db, args.run, args.source, json.loads(content))
     if args.command == 'list':
         return list_jobs(db, args)
+    if args.command == 'assess':
+        content = sys.stdin.read() if args.file == '-' else Path(args.file).read_text()
+        return save_assessments(db, json.loads(content))
+    if args.command == 'deadline':
+        return set_deadline(db, args.id, args.date, args.text, args.availability)
+    if args.command == 'feedback':
+        return feedback(db, args.since)
     if args.command == 'review':
         if args.status is None and args.notes is None and args.tag is None and args.reviewed is None:
             raise ValueError('Supply --status, --notes, --tag, or --reviewed')
@@ -408,7 +621,7 @@ def execute(db, args):
                 writer.writerow({k: "'" + v if isinstance(v, str) and v.lstrip().startswith(('=', '+', '-', '@')) else v for k, v in cells.items()})
     else:
         snapshot = {table: [decode_row(row) for row in db.execute(f'SELECT * FROM {table}')]
-                    for table in ('sources', 'search_runs', 'run_sources', 'jobs', 'sightings', 'reviews', 'profiles', 'job_comments')}
+                    for table in ('sources', 'search_runs', 'run_sources', 'jobs', 'sightings', 'reviews', 'profiles', 'job_comments', 'job_assessments')}
         count = len(snapshot['jobs'])
         with target.open('x') as handle:
             json.dump({'schema_version': 2, 'exported_at': now(), **snapshot}, handle, ensure_ascii=False, indent=2)
@@ -433,6 +646,7 @@ def parser():
     profile.add_parser('update').add_argument('--file', required=True, help='JSON patch file or - for stdin')
     sources = sub.add_parser('sources').add_subparsers(dest='action', required=True)
     sources.add_parser('list')
+    sources.add_parser('sync-lists', help='Write saved sources back into the company-list CSVs used by init')
     add = sources.add_parser('add')
     for name in ('name', 'url', 'kind'):
         add.add_argument('--' + name, required=True)
@@ -440,6 +654,8 @@ def parser():
     add.add_argument('--notes', default='')
     update = sources.add_parser('update')
     update.add_argument('id')
+    for name in ('name', 'url', 'kind'):
+        update.add_argument('--' + name)
     update.add_argument('--method', choices=('discover', 'api', 'rss', 'web', 'manual'))
     update.add_argument('--notes')
     update.add_argument('--enabled', type=int, choices=(0, 1))
@@ -477,6 +693,14 @@ def parser():
     review.add_argument('--notes')
     review.add_argument('--reviewed', type=int, choices=(0, 1))
     review.add_argument('--tag', action='append', help='Replaces all tags with the supplied repeated --tag values')
+    assess = sub.add_parser('assess', help='Save fit scores, reasons and short summaries')
+    assess.add_argument('--file', required=True, help='JSON array of {job_id, fit_score, fit_reason, summary}, or - for stdin')
+    deadline = sub.add_parser('deadline', help='Record a job\'s application deadline after checking the posting')
+    deadline.add_argument('id')
+    deadline.add_argument('--date', help='Last day to apply, YYYY-MM-DD; empty string clears it')
+    deadline.add_argument('--text', help=f'Posting wording such as "Rolling", or "{DEADLINE_NOT_LISTED}" when it states none')
+    deadline.add_argument('--availability', choices=('open', 'closed', 'unknown'), help='What the posting showed when rechecked')
+    sub.add_parser('feedback', help='The user\'s comments and notes on jobs, newest first').add_argument('--since', help='ISO date or datetime')
     sub.add_parser('stats')
     for command in ('export', 'backup'):
         output = sub.add_parser(command)
@@ -499,6 +723,10 @@ def main():
             raise ValueError(f'Unsupported or uninitialized database schema: {version}')
         db.execute('PRAGMA foreign_keys = ON')
         db.execute('PRAGMA journal_mode = WAL')
+        if version == 2:
+            # Idempotent: adds tables and columns introduced after a database was created.
+            db.executescript((ROOT / 'db' / 'schema.sql').read_text())
+            add_missing_columns(db)
         emit(execute(db, args))
     finally:
         db.close()

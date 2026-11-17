@@ -58,11 +58,14 @@ const cli = (...args) => JSON.parse(execFileSync('python3', [path.join(root, 'sc
   await page.getByRole('button',{name:'Reviewed',exact:true}).click();
   await page.getByRole('button',{name:'Mark reviewed',exact:true}).waitFor();
   await page.getByRole('button',{name:'Close job details'}).click();
-  await page.locator('[data-view="unreviewed"]').click();
+  // Shortlisting moves a job into the To review pipeline, where it can advance to Applied.
+  await page.locator('.job-card').dragTo(page.locator('[data-column="shortlisted"] .column-body'));
+  await page.locator('[data-column="shortlisted"] .job-card').waitFor();
+  await page.locator('[data-view="review"]').click();
   await page.getByRole('button',{name:'Customer Support Lead',exact:true}).waitFor();
-  await page.locator('[data-view="board"]').click();
   await page.locator('.job-card').dragTo(page.locator('[data-column="applied"] .column-body'));
   await page.locator('[data-column="applied"] .job-card').waitFor();
+  await page.locator('[data-view="board"]').click();
 
   await page.locator('[data-view="profile"]').click();
   await page.getByLabel('Your name',{exact:true}).fill('Browser Test');

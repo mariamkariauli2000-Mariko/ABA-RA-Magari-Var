@@ -1,0 +1,12 @@
+name,url,kind,method,enabled,notes
+CareerHound,https://www.careerhound.io/,job_board,discover,1,Seeded from remote-job-links.md; collection method not yet verified.
+Himalayas,https://himalayas.app/,job_board,api,1,"Search API https://himalayas.app/jobs/api/search?q=Q&country=GE&sort=recent&page=N, 20/page, pubDate epoch seconds, full description included (verified 2026-11-09)."
+LinkedIn Jobs,https://www.linkedin.com/jobs/,job_board,web,1,"Searched in the user's signed-in Chrome (Claude in Chrome), with the user's approval, at a user-paced volume. Filters: past 14 days; EMEA/Worldwide remote + Georgia/Tbilisi. LinkedIn's 'Georgia' often means the US state; 'Country (Remote)' usually means residence required. Read each posting, and use the 'Apply on company website' link as the original."
+Lionbridge,https://www.lionbridge.com/,company_careers,discover,1,Seeded from remote-job-links.md; collection method not yet verified.
+Remote OK,https://remoteok.com/,job_board,discover,1,Seeded from remote-job-links.md; collection method not yet verified.
+Remote4Me,https://remote4me.com/,job_board,discover,1,Seeded from remote-job-links.md; collection method not yet verified.
+Remotive,https://remotive.com/,job_board,discover,1,Seeded from remote-job-links.md; collection method not yet verified.
+SafetyWing — Careers,https://safetywing.pinpointhq.com/,company_careers,api,1,Pinpoint API: https://safetywing.pinpointhq.com/postings.json (no publish dates in feed).
+Todoist,https://www.todoist.com/,company_careers,web,1,Open roles load from the /_server-islands/OpenRoles fragment linked in todoist.com/careers HTML (verified 2026-11-09).
+Wellfound,https://wellfound.com/,job_board,discover,1,Seeded from remote-job-links.md; collection method not yet verified.
+jobs.ge,https://jobs.ge/en/,job_board,web,1,"Main Georgian job board. Search URL https://jobs.ge/en/?q=QUERY; Georgian queries work and match broadly, including across ad text. Full text often only at /ge/?view=jobs&id=ID."

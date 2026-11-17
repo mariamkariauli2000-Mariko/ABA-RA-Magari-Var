@@ -15,14 +15,31 @@ python3 scripts/jobs.py profile show
 python3 scripts/jobs.py run list
 ```
 
-`init` imports missing Markdown source links; it does not delete removed links,
-overwrite source settings, or reset jobs/reviews. To retire a source, disable it.
+`init` imports missing Markdown source links from `remote-job-links.md` and
+missing entries from the company lists `edtech-careers.csv`,
+`startup-support-orgs.csv` and `b2b-saas-careers.csv`; it does not delete removed links, overwrite source
+settings, or reset jobs/reviews. To retire a source, disable it.
+
+Each company-list row describes the organisation in its first columns; the
+last columns (`source_name`, `searched_url`, `kind`, `method`, `enabled`,
+`source_notes`) mirror its saved source. A row already counts as present when a
+source has its searched URL, its vacancy/website URL, `Website <url>` in its
+notes, or its name. Every other source (job boards, the original Markdown
+links, later additions) is kept in `job-sources.csv` as `name`, `url`, `kind`,
+`method`, `enabled`, `notes`; `init` reads the CSVs before the Markdown, so
+saved methods and notes win over its defaults. Refresh all three files after
+changing any source:
+
+```sh
+python3 scripts/jobs.py sources sync-lists
+```
 Additions can be made directly to the database:
 
 ```sh
 python3 scripts/jobs.py sources add --name 'Example Careers' --url 'https://example.com/careers' --kind company_careers --method discover
 python3 scripts/jobs.py sources update SOURCE_ID --method api --notes 'Verified endpoint, pagination, delay and request limits go here.'
 python3 scripts/jobs.py sources update SOURCE_ID --enabled 0
+python3 scripts/jobs.py sources update SOURCE_ID --name 'Example — Careers' --url 'https://example.com/careers' --kind company_careers --method web
 ```
 
 The source kinds imported from the existing file are `job_board`,
@@ -116,7 +133,9 @@ not a real vacancy to insert into the user's database:
 ```
 
 Other accepted fields: `timezone_requirements`, `seniority`, `published_at`
-(ISO date or datetime), `employer_job_id`, `source_job_id` (text IDs), and `skills`
+(ISO date or datetime), `application_deadline` (last day to apply, `YYYY-MM-DD`),
+`deadline_text` (the posting's wording, or exactly `Not listed` when the posting
+was read and states none), `employer_job_id`, `source_job_id` (text IDs), and `skills`
 (array of text). `eligible_countries` is also an array of text when known. Omit
 unknown values or use null. `remote_status`: `remote`, `hybrid`, `onsite`,
 `unknown`. `availability`: `open`, `closed`, `unknown`.
@@ -137,6 +156,28 @@ query parameters and hash routes, and keeps distinct URLs distinct. Cross-source
 duplicates without a confirmed common canonical URL remain separate; fuzzy merges
 are deliberately not automatic. A changed canonical identity for an already-seen
 source URL needs manual resolution before import.
+
+## Deadlines and the user's feedback
+
+Record or correct a deadline after rechecking a posting, without a collection run:
+
+```sh
+python3 scripts/jobs.py deadline JOB_ID --date 2026-11-26 --text 'Apply by 26 November'
+python3 scripts/jobs.py deadline JOB_ID --text 'Not listed'
+python3 scripts/jobs.py deadline JOB_ID --availability closed
+```
+
+`--availability` records what the recheck showed: `open` only when the employer's
+page or the source still lists the job, `closed` only when the posting says so or
+is gone from the employer's page. The board shows closed jobs as "Posting closed".
+
+`--date ''` clears a wrong date. Read the user's comments and notes on jobs,
+newest first, before planning a search:
+
+```sh
+python3 scripts/jobs.py feedback
+python3 scripts/jobs.py feedback --since 2026-11-17
+```
 
 ## Review, export and back up
 
