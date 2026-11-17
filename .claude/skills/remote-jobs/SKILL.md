@@ -17,7 +17,13 @@ storage, or depend on chat history for continuity.
 Read [the storage contract](references/storage.md) before writing records.
 Use `python3 scripts/jobs.py --help` for command discovery. If the database is
 missing, run `python3 scripts/jobs.py init`. Initialization imports missing
-sources from `remote-job-links.md` and preserves existing source settings.
+sources from the company lists `edtech-careers.csv`,
+`startup-support-orgs.csv` and `b2b-saas-careers.csv`, every other saved source in `job-sources.csv`
+(job boards such as LinkedIn and jobs.ge, the original links), and
+`remote-job-links.md`, and preserves existing source settings.
+After adding, moving, enabling/disabling or annotating any source, run
+`python3 scripts/jobs.py sources sync-lists` so these files keep the page
+searched, its on/off state and notes for a rebuilt database.
 
 ## Choose the requested action
 

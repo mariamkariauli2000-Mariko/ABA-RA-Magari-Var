@@ -15,14 +15,31 @@ python3 scripts/jobs.py profile show
 python3 scripts/jobs.py run list
 ```
 
-`init` imports missing Markdown source links; it does not delete removed links,
-overwrite source settings, or reset jobs/reviews. To retire a source, disable it.
+`init` imports missing Markdown source links from `remote-job-links.md` and
+missing entries from the company lists `edtech-careers.csv`,
+`startup-support-orgs.csv` and `b2b-saas-careers.csv`; it does not delete removed links, overwrite source
+settings, or reset jobs/reviews. To retire a source, disable it.
+
+Each company-list row describes the organisation in its first columns; the
+last columns (`source_name`, `searched_url`, `kind`, `method`, `enabled`,
+`source_notes`) mirror its saved source. A row already counts as present when a
+source has its searched URL, its vacancy/website URL, `Website <url>` in its
+notes, or its name. Every other source (job boards, the original Markdown
+links, later additions) is kept in `job-sources.csv` as `name`, `url`, `kind`,
+`method`, `enabled`, `notes`; `init` reads the CSVs before the Markdown, so
+saved methods and notes win over its defaults. Refresh all three files after
+changing any source:
+
+```sh
+python3 scripts/jobs.py sources sync-lists
+```
 Additions can be made directly to the database:
 
 ```sh
 python3 scripts/jobs.py sources add --name 'Example Careers' --url 'https://example.com/careers' --kind company_careers --method discover
 python3 scripts/jobs.py sources update SOURCE_ID --method api --notes 'Verified endpoint, pagination, delay and request limits go here.'
 python3 scripts/jobs.py sources update SOURCE_ID --enabled 0
+python3 scripts/jobs.py sources update SOURCE_ID --name 'Example — Careers' --url 'https://example.com/careers' --kind company_careers --method web
 ```
 
 The source kinds imported from the existing file are `job_board`,

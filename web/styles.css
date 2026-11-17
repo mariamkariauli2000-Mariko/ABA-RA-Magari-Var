@@ -274,3 +274,15 @@ input[type="checkbox"] { accent-color: var(--blue); width: 15px; height: 15px; f
 }
 .source-badge { display: inline-block; margin-left: 6px; vertical-align: 1px; font-size: 10px; font-weight: 600; line-height: 1; padding: 3px 5px; border-radius: 3px; letter-spacing: .02em; }
 .source-badge.linkedin { background: #0a66c2; color: #fff; }
+
+/* Selecting several cards for one status change */
+.select-box { width: 15px; height: 15px; margin: 2px 6px 0 0; flex: none; cursor: pointer; accent-color: #2383e2; }
+.column-heading .select-all { margin: 0 4px 0 0; }
+.job-card.is-selected { box-shadow: 0 0 0 2px #2383e2; }
+.jobs-table tr.is-selected td { background: #eef5fc; }
+.select-cell { width: 28px; }
+.bulk-bar { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 50; display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  max-width: calc(100vw - 32px); padding: 10px 14px; background: #fff; border: 1px solid #e3e2e0; border-radius: 10px; box-shadow: 0 8px 24px rgba(15,15,15,.15); font-size: 13px; }
+.bulk-bar[hidden] { display: none; }
+.bulk-count { font-weight: 600; }
+.bulk-bar select { font: inherit; padding: 4px 6px; border: 1px solid #e3e2e0; border-radius: 6px; background: #fff; }

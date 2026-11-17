@@ -197,6 +197,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == '/api/jobs' and method == 'POST':
             self.send(201, create_manual_job(db, data))
             return
+        if path == '/api/reviews/bulk' and method == 'POST':
+            # Same change for several selected cards: status and/or reviewed state only.
+            ids = data.get('job_ids')
+            if not isinstance(ids, list) or not ids or len(ids) > 1000 or any(not isinstance(i, str) for i in ids):
+                raise ValueError('Select between 1 and 1000 jobs')
+            changes = {k: v for k, v in data.items() if k != 'job_ids'}
+            if not changes or set(changes) - {'status', 'reviewed'}:
+                raise ValueError('Supply status, reviewed, or both')
+            ids = list(dict.fromkeys(ids))
+            for job_id in ids:  # check every job before changing any
+                storage.require_row(db, 'jobs', 'id', job_id)
+            for job_id in ids:
+                storage.update_review(db, job_id, **changes)
+            self.send(200, {'updated': len(ids)})
+            return
         parts = path.strip('/').split('/')
         if len(parts) >= 3 and parts[:2] == ['api', 'jobs']:
             job_id = parts[2]

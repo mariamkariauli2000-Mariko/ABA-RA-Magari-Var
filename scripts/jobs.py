@@ -265,20 +265,122 @@ def feedback(db, since=None):
     return [dict(row) for row in rows]
 
 
-def initialize(db):
+# Company lists kept in the project. Their first columns describe the organisation; the
+# LIST_SOURCE_COLUMNS hold the source as saved in the database (page searched, on/off, notes),
+# written by `sources sync-lists` so a rebuilt database gets the same sources back.
+SOURCE_LISTS = (('edtech-careers.csv', 'company', 'vacancy_url'), ('startup-support-orgs.csv', 'name', 'website'),
+                ('b2b-saas-careers.csv', 'company', 'vacancy_url'))
+LIST_SOURCE_COLUMNS = ('source_name', 'searched_url', 'kind', 'method', 'enabled', 'source_notes')
+# Every other saved source (job boards, the original links, later additions), one row per source.
+OTHER_SOURCES = 'job-sources.csv'
+OTHER_SOURCE_COLUMNS = ('name', 'url', 'kind', 'method', 'enabled', 'notes')
+
+
+def read_source_list(path):
+    with path.open(newline='', encoding='utf-8') as handle:
+        reader = csv.DictReader(handle)
+        return list(reader.fieldnames or []), list(reader)
+
+
+def seed_lists(db, folder=ROOT):
+    """Add list entries that have no source yet; never change an existing source."""
+    other = folder / OTHER_SOURCES
+    for row in read_source_list(other)[1] if other.exists() else []:
+        source_id = add_source(db, row['name'], row['url'], row['kind'], method=row['method'] or 'discover', notes=row['notes'])
+        if row['enabled'] == '0' and db.execute('SELECT changes()').fetchone()[0]:
+            db.execute('UPDATE sources SET enabled = 0 WHERE id = ?', (source_id,))
+    for filename, name_column, url_column in SOURCE_LISTS:
+        path = folder / filename
+        if not path.exists():
+            continue
+        for row in read_source_list(path)[1]:
+            if list_row_source(db, row, name_column) is not None:
+                continue
+            url = row.get('searched_url') or row[url_column]
+            source_id = add_source(db, row.get('source_name') or row[name_column], url, row.get('kind') or 'company_careers',
+                                   method=row.get('method') or 'discover',
+                                   notes=row.get('source_notes') or f'Seeded from {filename}; collection method not yet verified.')
+            if row.get('enabled') == '0':
+                db.execute('UPDATE sources SET enabled = 0 WHERE id = ?', (source_id,))
+
+
+def comparable_url(url):
+    return normalize_url(url).lower().rstrip('/').replace('://www.', '://')
+
+
+def list_row_source(db, row, name_column):
+    """The saved source for a list entry: its searched page, its website noted on the source, or its name."""
+    sources = [dict(r) for r in db.execute('SELECT * FROM sources')]
+    urls = {comparable_url(u) for u in (row.get('searched_url'), row.get('vacancy_url'), row.get('website')) if u}
+    for source in sources:
+        if comparable_url(source['url']) in urls:
+            return source
+    website = row.get('website')
+    if website:
+        for source in sources:
+            noted = re.search(r'Website (\S+?)\.?(?:\s|$)', source['notes'] or '')
+            if noted and comparable_url(noted[1]) == comparable_url(website):
+                return source
+    if row.get('searched_url'):
+        return None  # the row records its own page; a name match could be another organisation (e.g. Remote vs Remote OK)
+    names ={n.lower() for n in (row.get('source_name'), row[name_column]) if n}
+    for source in sources:
+        if source['name'].lower() in names or any(source['name'].lower().startswith(n + ' ') for n in names):
+            return source
+    return None
+
+
+def sync_lists(db, folder=ROOT):
+    """Write each list entry's current source back into its CSV."""
+    result, listed = {}, set()
+    for filename, name_column, _ in SOURCE_LISTS:
+        path = folder / filename
+        if not path.exists():
+            continue
+        fields, rows = read_source_list(path)
+        fields = [f for f in fields if f not in LIST_SOURCE_COLUMNS] + list(LIST_SOURCE_COLUMNS)
+        missing = []
+        for row in rows:
+            source = list_row_source(db, row, name_column)
+            if source is None:
+                missing.append(row[name_column])
+                continue
+            listed.add(source['id'])
+            row.update(source_name=source['name'], searched_url=source['url'], kind=source['kind'],
+                       method=source['method'], enabled=str(source['enabled']), source_notes=source['notes'] or '')
+        temporary = path.with_suffix('.csv.tmp')
+        with temporary.open('w', newline='', encoding='utf-8') as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows({f: row.get(f, '') for f in fields} for row in rows)
+        temporary.replace(path)
+        result[filename] = {'rows': len(rows), 'without_source': missing}
+    other = [dict(r) for r in db.execute("SELECT * FROM sources WHERE kind != 'manual' ORDER BY name, url") if r['id'] not in listed]
+    temporary = folder / (OTHER_SOURCES + '.tmp')
+    with temporary.open('w', newline='', encoding='utf-8') as handle:
+        writer = csv.DictWriter(handle, fieldnames=OTHER_SOURCE_COLUMNS)
+        writer.writeheader()
+        writer.writerows({f: '' if row[f] is None else row[f] for f in OTHER_SOURCE_COLUMNS} for row in other)
+    temporary.replace(folder / OTHER_SOURCES)
+    result[OTHER_SOURCES] = {'rows': len(other)}
+    return result
+
+
+def initialize(db, folder=ROOT):
     version = db.execute('PRAGMA user_version').fetchone()[0]
     if version == 1:
         db.executescript((ROOT / 'db' / 'migrations' / '002_profiles_and_reviews.sql').read_text())
     db.executescript((ROOT / 'db' / 'schema.sql').read_text())
     add_missing_columns(db)
-    seed_file = ROOT / 'remote-job-links.md'
+    seed_file = folder / 'remote-job-links.md'  # read after the CSVs, so saved settings win
     kind = 'discovery'
     with write_transaction(db):
+        seed_lists(db, folder)
         for line in seed_file.read_text().splitlines() if seed_file.exists() else []:
             if line.startswith('## '):
                 kind = {'Job boards': 'job_board', 'Company career pages': 'company_careers'}.get(line[3:], 'discovery')
             match = re.match(r'^- \[([^]]+)\]\((https?://[^)]+)\)', line)
-            if match:
+            if match and not db.execute('SELECT 1 FROM sources WHERE name = ?', (match[1],)).fetchone():
                 linkedin = urlsplit(match[2]).hostname in ('linkedin.com', 'www.linkedin.com')
                 method = 'manual' if linkedin else 'discover'
                 notes = ('LinkedIn: native alerts or user-provided listings; automated scraping is not configured.' if linkedin else
@@ -419,15 +521,18 @@ def execute(db, args):
     if args.command == 'sources':
         if args.action == 'list':
             return [dict(row) for row in db.execute('SELECT * FROM sources ORDER BY name')]
+        if args.action == 'sync-lists':
+            return sync_lists(db)
         with write_transaction(db):
             if args.action == 'add':
                 source_id = add_source(db, args.name, args.url, args.kind, args.method, args.notes)
             else:
                 source_id = args.id
                 require_row(db, 'sources', 'id', source_id)
-                updates = {k: v for k, v in {'method': args.method, 'notes': args.notes, 'enabled': args.enabled}.items() if v is not None}
+                updates = {k: v for k, v in {'name': args.name, 'url': args.url, 'kind': args.kind, 'method': args.method,
+                                             'notes': args.notes, 'enabled': args.enabled}.items() if v is not None}
                 if not updates:
-                    raise ValueError('Supply --method, --notes, or --enabled')
+                    raise ValueError('Supply --name, --url, --kind, --method, --notes, or --enabled')
                 db.execute('UPDATE sources SET ' + ', '.join(f'{k} = ?' for k in updates) + ' WHERE id = ?',
                            (*updates.values(), source_id))
         return dict(require_row(db, 'sources', 'id', source_id))
@@ -541,6 +646,7 @@ def parser():
     profile.add_parser('update').add_argument('--file', required=True, help='JSON patch file or - for stdin')
     sources = sub.add_parser('sources').add_subparsers(dest='action', required=True)
     sources.add_parser('list')
+    sources.add_parser('sync-lists', help='Write saved sources back into the company-list CSVs used by init')
     add = sources.add_parser('add')
     for name in ('name', 'url', 'kind'):
         add.add_argument('--' + name, required=True)
@@ -548,6 +654,8 @@ def parser():
     add.add_argument('--notes', default='')
     update = sources.add_parser('update')
     update.add_argument('id')
+    for name in ('name', 'url', 'kind'):
+        update.add_argument('--' + name)
     update.add_argument('--method', choices=('discover', 'api', 'rss', 'web', 'manual'))
     update.add_argument('--notes')
     update.add_argument('--enabled', type=int, choices=(0, 1))

@@ -16,6 +16,11 @@ const lanes={
   closed:[notFit],
 };
 const reviewStatuses=['shortlisted','applied','interviewing','offer'];
+// Where selected cards can be moved in one step (same meaning as dropping on that column).
+const bulkTargets=[['To review',{status:'new',reviewed:false}],['Reviewed',{status:'new',reviewed:true}],['Shortlisted',{status:'shortlisted'}],
+  ['Applied',{status:'applied'}],['Interviewing',{status:'interviewing'}],['Offer',{status:'offer'}],
+  ['Not relevant & not fit',{status:'archived'}],['Rejected',{status:'rejected'}]];
+const selected=new Set();
 const state = {jobs:[], sources:[], runs:[], profile:{profile:{},version:0}, view:'board', layout:'board', query:'', remote:'', reviewed:'', detail:null, profileDraft:null};
 let noteTimer, pendingNote=null, noteChain=Promise.resolve(), toastTimer, focusBeforeDialog;
 let token = $('meta[name="workspace-token"]').content;
@@ -65,9 +70,11 @@ async function refresh(render=true){
   $('#count-all').textContent=state.jobs.length;
   $('#count-review').textContent=state.jobs.filter(j=>reviewStatuses.includes(j.review_status)).length;
   $('#count-closed').textContent=state.jobs.filter(j=>['archived','rejected'].includes(j.review_status)).length;
+  for(const id of [...selected])if(!state.jobs.some(j=>j.id===id))selected.delete(id);
   if(render) renderPage();
 }
 function navigate(view){
+  selected.clear();
   state.view=view;state.query='';state.remote='';state.reviewed='';
   $$('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===view));
   $('#sidebar').classList.remove('mobile-open');
@@ -79,6 +86,7 @@ function heading(title,subtitle='',actions=''){
   return `<div class="page-heading"><div><h1>${esc(title)}</h1>${subtitle?`<p class="subtitle">${esc(subtitle)}</p>`:''}</div>${actions?`<div class="heading-actions">${actions}</div>`:''}</div>`;
 }
 function renderPage(){
+  if(['profile','sources'].includes(state.view)&&$('#bulk-bar'))$('#bulk-bar').hidden=true;
   if(state.view==='profile')return renderProfile();
   if(state.view==='sources')return renderSources();
   const titles={board:'Opportunities',review:'To review',closed:'Not relevant & not fit'};
@@ -105,10 +113,12 @@ function filteredJobs(){return state.jobs.filter(j=>{
   return !state.query||[j.title,j.company,j.location_text,j.source_names,...(j.skills||[]),...(j.review_tags||[])].join(' ').toLowerCase().includes(state.query.toLowerCase());
 });}
 function fromLinkedIn(job){return /linkedin/i.test(job.source_names||'');}
+function selectBox(job){return `<input type="checkbox" class="select-box" data-select="${esc(job.id)}" ${selected.has(job.id)?'checked':''} aria-label="Select ${esc(job.title)} at ${esc(job.company)}">`;}
+function selectAllBox(ids,label){const on=ids.length>0&&ids.every(id=>selected.has(id));const some=!on&&ids.some(id=>selected.has(id));return `<input type="checkbox" class="select-box select-all" data-select-all="${esc(ids.join(','))}" ${on?'checked':''} ${some?'data-partial="1"':''} ${ids.length?'':'disabled'} aria-label="Select all in ${esc(label)}">`;}
 function card(job){
   const details=[job.location_text].filter(Boolean);
-  return `<article class="job-card" draggable="true" data-job="${esc(job.id)}">
-    <div class="card-head"><button class="card-open" data-open-job="${esc(job.id)}">${esc(job.title)}</button>${fitBadge(job.fit_score)}</div>
+  return `<article class="job-card ${selected.has(job.id)?'is-selected':''}" draggable="true" data-job="${esc(job.id)}">
+    <div class="card-head">${selectBox(job)}<button class="card-open" data-open-job="${esc(job.id)}">${esc(job.title)}</button>${fitBadge(job.fit_score)}</div>
     <div class="card-company">${esc(job.company)}${fromLinkedIn(job)?'<span class="source-badge linkedin" title="Found on LinkedIn">in LinkedIn</span>':''}</div>
     <div class="card-posted">${esc(posted(job))}</div>
     <div class="card-salary ${!salary(job)||salary(job).startsWith('Salary not listed')?'is-missing':''}">${esc(salary(job)||'Salary not listed')}</div>
@@ -122,23 +132,51 @@ function card(job){
 function renderJobs(){
   const jobs=filteredJobs();$('#view-count').textContent=jobs.length;
   if(state.layout==='list'){
-    $('#job-content').innerHTML=jobs.length?`<div class="table-wrap"><table class="jobs-table"><thead><tr><th>Fit</th><th>Job</th><th>Company</th><th>Posted</th><th>Deadline</th><th>Salary</th><th>Status</th><th>Location</th><th>Review</th><th>Comments</th></tr></thead><tbody>${jobs.map(j=>`<tr><td>${fitBadge(j.fit_score)||'—'}</td><td><button class="table-title" data-open-job="${esc(j.id)}">${esc(j.title)}</button></td><td>${esc(j.company)}</td><td>${j.published_at?esc(shortDate(j.published_at)):'—'}</td><td>${deadlineLine(j,'span')}</td><td>${esc(salary(j)||'Salary not listed')}</td><td>${pill(j.review_status)}</td><td>${esc(j.location_text||'Not specified')}</td><td>${j.reviewed_at?'Reviewed':'Not reviewed'}</td><td>${j.comment_count||'—'}</td></tr>`).join('')}</tbody></table></div>`:`<div class="no-results">${state.jobs.length?'No jobs match these filters.':'No jobs yet. Add a job or search with Claude.'}</div>`;
+    $('#job-content').innerHTML=jobs.length?`<div class="table-wrap"><table class="jobs-table"><thead><tr><th class="select-cell">${selectAllBox(jobs.map(j=>j.id),'this list')}</th><th>Fit</th><th>Job</th><th>Company</th><th>Posted</th><th>Deadline</th><th>Salary</th><th>Status</th><th>Location</th><th>Review</th><th>Comments</th></tr></thead><tbody>${jobs.map(j=>`<tr class="${selected.has(j.id)?'is-selected':''}"><td class="select-cell">${selectBox(j)}</td><td>${fitBadge(j.fit_score)||'—'}</td><td><button class="table-title" data-open-job="${esc(j.id)}">${esc(j.title)}</button></td><td>${esc(j.company)}</td><td>${j.published_at?esc(shortDate(j.published_at)):'—'}</td><td>${deadlineLine(j,'span')}</td><td>${esc(salary(j)||'Salary not listed')}</td><td>${pill(j.review_status)}</td><td>${esc(j.location_text||'Not specified')}</td><td>${j.reviewed_at?'Reviewed':'Not reviewed'}</td><td>${j.comment_count||'—'}</td></tr>`).join('')}</tbody></table></div>`:`<div class="no-results">${state.jobs.length?'No jobs match these filters.':'No jobs yet. Add a job or search with Claude.'}</div>`;
   }else{
     const columns=lanes[state.view]||lanes.board;
-    $('#job-content').innerHTML=`${state.jobs.length&&jobs.length===0?'<p class="filter-empty" role="status">No jobs match these filters.</p>':''}<div class="board" aria-label="Job application board">${columns.map(col=>{const cards=jobs.filter(col.match);return `<section class="column" data-column="${col.key}" aria-label="${esc(col.label)} column"><div class="column-heading"><span class="status-pill tone-${col.tone}">${esc(col.label)}</span><span class="column-count">${cards.length}</span><button class="text-button column-add" data-add-status="${col.patch.status}" aria-label="Add job to ${esc(col.label)}">+</button></div><div class="column-body">${cards.map(card).join('')}<button class="new-card" data-add-status="${col.patch.status}">+ New</button></div></section>`;}).join('')}</div>${state.jobs.length===0?'<p class="empty-board-hint">Add a job to get started, or use Search with Claude to collect listings.</p>':''}`;
+    $('#job-content').innerHTML=`${state.jobs.length&&jobs.length===0?'<p class="filter-empty" role="status">No jobs match these filters.</p>':''}<div class="board" aria-label="Job application board">${columns.map(col=>{const cards=jobs.filter(col.match);return `<section class="column" data-column="${col.key}" aria-label="${esc(col.label)} column"><div class="column-heading">${selectAllBox(cards.map(j=>j.id),col.label)}<span class="status-pill tone-${col.tone}">${esc(col.label)}</span><span class="column-count">${cards.length}</span><button class="text-button column-add" data-add-status="${col.patch.status}" aria-label="Add job to ${esc(col.label)}">+</button></div><div class="column-body">${cards.map(card).join('')}<button class="new-card" data-add-status="${col.patch.status}">+ New</button></div></section>`;}).join('')}</div>${state.jobs.length===0?'<p class="empty-board-hint">Add a job to get started, or use Search with Claude to collect listings.</p>':''}`;
     $$('[data-add-status]').forEach(el=>el.onclick=()=>openAdd(el.dataset.addStatus));
     $$('.job-card').forEach(el=>{
       el.ondragstart=e=>{e.dataTransfer.setData('text/plain',el.dataset.job);e.dataTransfer.effectAllowed='move';el.classList.add('dragging');};
       el.ondragend=()=>{$$('.dragging,.drag-over').forEach(n=>n.classList.remove('dragging','drag-over'));};
-      el.onclick=e=>{if(!e.target.closest('button'))openJob(el.dataset.job).catch(report);};
+      el.onclick=e=>{if(!e.target.closest('button,input'))openJob(el.dataset.job).catch(report);};
     });
     $$('[data-column]').forEach(el=>{
       el.ondragover=e=>{e.preventDefault();el.classList.add('drag-over');};
       el.ondragleave=e=>{if(!el.contains(e.relatedTarget))el.classList.remove('drag-over');};
-      el.ondrop=e=>{e.preventDefault();el.classList.remove('drag-over');const id=e.dataTransfer.getData('text/plain');const col=(lanes[state.view]||lanes.board).find(c=>c.key===el.dataset.column);if(col&&state.jobs.some(j=>j.id===id))saveReview(id,col.patch).catch(report);};
+      el.ondrop=e=>{e.preventDefault();el.classList.remove('drag-over');const id=e.dataTransfer.getData('text/plain');const col=(lanes[state.view]||lanes.board).find(c=>c.key===el.dataset.column);if(!col||!state.jobs.some(j=>j.id===id))return;if(selected.has(id)&&selected.size>1)bulkSave(col.patch,col.label).catch(report);else saveReview(id,col.patch).catch(report);};
     });
   }
   $$('[data-open-job]').forEach(el=>el.onclick=()=>openJob(el.dataset.openJob).catch(report));
+  $$('[data-partial]').forEach(el=>el.indeterminate=true);
+  $$('[data-select]').forEach(el=>el.onchange=()=>{el.checked?selected.add(el.dataset.select):selected.delete(el.dataset.select);renderJobs();});
+  $$('[data-select-all]').forEach(el=>el.onchange=()=>{const ids=el.dataset.selectAll.split(',').filter(Boolean);ids.forEach(id=>el.checked?selected.add(id):selected.delete(id));renderJobs();});
+  renderBulkBar();
+}
+function renderBulkBar(){
+  let bar=$('#bulk-bar');
+  if(!selected.size||!$('#job-content')){if(bar)bar.hidden=true;return;}
+  if(!bar){bar=document.createElement('div');bar.id='bulk-bar';bar.className='bulk-bar';bar.setAttribute('role','toolbar');bar.setAttribute('aria-label','Selected jobs');document.body.append(bar);}
+  bar.hidden=false;
+  bar.innerHTML=`<span class="bulk-count">${selected.size} selected</span>
+    <select id="bulk-move" aria-label="Move selected jobs to"><option value="">Move to…</option>${bulkTargets.map(([label],i)=>`<option value="${i}">${esc(label)}</option>`).join('')}</select>
+    <button class="button small" id="bulk-reviewed">Mark reviewed</button><button class="button small" id="bulk-unreviewed">Mark not reviewed</button>
+    <button class="text-button" id="bulk-clear">Clear selection</button>`;
+  $('#bulk-move').onchange=e=>{const t=bulkTargets[e.target.value];if(t)bulkSave(t[1],t[0]).catch(report);};
+  $('#bulk-reviewed').onclick=()=>bulkSave({reviewed:true},'Reviewed').catch(report);
+  $('#bulk-unreviewed').onclick=()=>bulkSave({reviewed:false},'Not reviewed').catch(report);
+  $('#bulk-clear').onclick=()=>{selected.clear();renderJobs();};
+}
+async function bulkSave(patch,label){
+  await flushNotes();
+  const controls=$$('#bulk-bar button,#bulk-bar select');
+  controls.forEach(el=>el.disabled=true);
+  try{
+    const result=await api('/api/reviews/bulk',{method:'POST',body:JSON.stringify({job_ids:[...selected],...patch})});
+    selected.clear();await refresh();
+    toast(`${result.updated} ${result.updated===1?'job':'jobs'} ${patch.status?'moved to':'marked'} ${label}`);
+  }finally{controls.forEach(el=>el.disabled=false);}
 }
 async function openJob(id){
   await flushNotes();state.detail=await api(`/api/jobs/${id}`);renderDetail();
@@ -206,3 +244,4 @@ $('#copy-search').onclick=async()=>{try{await navigator.clipboard.writeText($('#
 $('#add-form').onsubmit=async e=>{e.preventDefault();const form=e.target,values=Object.fromEntries(new FormData(form)),status=values.status;delete values.status;const button=$('[type="submit"]',form);button.disabled=true;try{const job=await api('/api/jobs',{method:'POST',body:JSON.stringify({job:values,status})});$('#add-dialog').close();await refresh();await openJob(job.id);toast('Opportunity added');}catch(error){report(error);}finally{button.disabled=false;}};
 window.addEventListener('beforeunload',e=>{if(pendingNote){e.preventDefault();e.returnValue='';}});
 refresh().catch(error=>{$('#main').innerHTML=`<div class="error-page"><h2>Couldn’t open your workspace</h2><p>${esc(error.message)}</p><button class="button" id="retry-load">Try again</button></div>`;$('#retry-load').onclick=()=>location.reload();});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&selected.size&&!document.querySelector('dialog[open]')&&$('#job-content')){selected.clear();renderJobs();}});
