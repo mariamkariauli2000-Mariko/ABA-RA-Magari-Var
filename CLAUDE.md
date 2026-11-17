@@ -8,8 +8,10 @@ Initialize and access it through `python3 scripts/jobs.py`.
   notes, tags and application statuses.
 - Read `python3 scripts/jobs.py profile show` before every search. New runs save a
   profile snapshot; use it for the run, and apply later edits to the next search.
-- Start the local dashboard with `python3 scripts/serve.py` at
-  `http://127.0.0.1:8765`. Browser writes go through the local API to the same file.
+- The local dashboard at `http://127.0.0.1:8765` runs as a macOS launch agent
+  (`python3 scripts/dashboard_service.py install|status|uninstall`): it starts at
+  login and restarts after any exit, logging to `data/dashboard.log`. Without it,
+  run `python3 scripts/serve.py`. Browser writes go through the local API to the same file.
 - `remote-job-links.md` contains the original source leads. Initialization imports
   missing links without changing existing source settings; unverified methods
   remain `discover` until checked.

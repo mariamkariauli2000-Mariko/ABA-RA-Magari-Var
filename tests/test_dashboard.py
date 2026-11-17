@@ -99,7 +99,8 @@ class DashboardTests(unittest.TestCase):
         self.request('/api/profile', 'PUT', {'profile': {'salary_min': -1}}, expect=400)
 
     def test_untrusted_web_origins_and_invalid_writes_are_rejected(self):
-        self.request('/api/jobs', 'POST', {}, token=False, expect=403)
+        rejected = self.request('/api/jobs', 'POST', {}, token=False, expect=403)
+        self.assertEqual(rejected['code'], 'stale_token')
         self.request('/api/jobs', 'POST', {}, origin='https://example.invalid', expect=403)
         self.request('/api/jobs', 'POST', {'job': {'title': 'Missing URL'}}, expect=400)
         self.assertEqual(self.request('/api/state')['jobs'], [])

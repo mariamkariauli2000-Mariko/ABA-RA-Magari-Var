@@ -5,10 +5,20 @@ const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;'
 const statuses = {new:'Inbox',shortlisted:'Shortlisted',applied:'Applied',interviewing:'Interviewing',offer:'Offer',rejected:'Rejected',archived:'Archived'};
 const state = {jobs:[], sources:[], runs:[], profile:{profile:{},version:0}, view:'board', layout:'board', query:'', remote:'', reviewed:'', detail:null, profileDraft:null};
 let noteTimer, pendingNote=null, noteChain=Promise.resolve(), toastTimer, focusBeforeDialog;
-const token = $('meta[name="workspace-token"]').content;
-async function api(path, options={}){
-  const response = await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Workspace-Token':token,...options.headers}});
-  const data = await response.json();
+let token = $('meta[name="workspace-token"]').content;
+// The server issues a new token each time it starts. Pick it up from the page instead of failing the save.
+async function renewToken(){
+  const html = await (await fetch('/',{cache:'no-store'})).text();
+  const fresh = new DOMParser().parseFromString(html,'text/html').querySelector('meta[name="workspace-token"]')?.content;
+  if(!fresh) throw new Error('Refresh this workspace before making changes.');
+  token = fresh;
+}
+async function api(path, options={}, retried=false){
+  let response;
+  try{response = await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Workspace-Token':token,...options.headers}});}
+  catch{throw new Error('The dashboard server is not responding. It restarts on its own; try again in a few seconds.');}
+  const data = await response.json().catch(()=>({}));
+  if(response.status===403 && data.code==='stale_token' && !retried){await renewToken();return api(path,options,true);}
   if(!response.ok) throw new Error(data.error || 'Could not save your change.');
   return data;
 }

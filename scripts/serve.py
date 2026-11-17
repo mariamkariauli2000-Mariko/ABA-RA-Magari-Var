@@ -133,7 +133,8 @@ class Handler(BaseHTTPRequestHandler):
             data = {}
             if self.command != 'GET':
                 if self.headers.get('X-Workspace-Token') != self.server.token:
-                    self.send(403, {'error': 'Refresh this workspace before making changes.'})
+                    # The token changes on every server start; the page uses this code to fetch the new one and retry.
+                    self.send(403, {'error': 'Refresh this workspace before making changes.', 'code': 'stale_token'})
                     return
                 origin = self.headers.get('Origin')
                 if origin and origin not in {f'http://{host}' for host in allowed}:
