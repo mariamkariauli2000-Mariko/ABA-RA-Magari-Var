@@ -72,6 +72,7 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; line-height: 1.2; letter-spac
 .column-heading { display: flex; align-items: center; gap: 8px; padding: 0 4px 10px; height: 36px; }
 .status-pill { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 12px; font-weight: 500; line-height: 18px; white-space: nowrap; background: #e9e9e7; }
 .tone-new { background: #e9e9e7; color: #5b5a57; }
+.tone-reviewed { background: #e6f2ee; color: #2f6b55; }
 .tone-shortlisted { background: #e8deee; color: #694487; }
 .tone-applied { background: #dce9f5; color: #326590; }
 .tone-interviewing { background: #f6e8be; color: #806625; }
@@ -89,6 +90,10 @@ h1 { margin: 0; font-size: 34px; font-weight: 700; line-height: 1.2; letter-spac
 .card-posted { font-size: 11px; color: #9b9a97; margin-top: 2px; }
 .card-salary { font-size: 12px; font-weight: 600; color: #37352f; margin-top: 6px; }
 .card-salary.is-missing { font-weight: 400; color: #8a4b0f; }
+.card-deadline { font-size: 12px; color: #37352f; margin-top: 2px; }
+.card-deadline.is-soon { color: #b5321f; font-weight: 600; }
+.card-deadline.is-passed { color: #9b9a97; text-decoration: line-through; }
+.card-deadline.is-missing { color: #8a4b0f; }
 .card-summary { font-size: 12px; line-height: 1.5; color: #37352f; margin: 8px 0 0; }
 .fit-checks { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 2px; font-size: 12px; line-height: 1.45; }
 .check-plus { color: #1c6b3a; }
@@ -267,3 +272,5 @@ input[type="checkbox"] { accent-color: var(--blue); width: 15px; height: 15px; f
 @media (prefers-reduced-motion: reduce) {
   *, *:before, *:after { transition: none !important; }
 }
+.source-badge { display: inline-block; margin-left: 6px; vertical-align: 1px; font-size: 10px; font-weight: 600; line-height: 1; padding: 3px 5px; border-radius: 3px; letter-spacing: .02em; }
+.source-badge.linkedin { background: #0a66c2; color: #fff; }

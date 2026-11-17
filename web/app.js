@@ -2,7 +2,20 @@
 const $ = (selector, root=document) => root.querySelector(selector);
 const $$ = (selector, root=document) => [...root.querySelectorAll(selector)];
 const esc = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-const statuses = {new:'Inbox',shortlisted:'Shortlisted',applied:'Applied',interviewing:'Interviewing',offer:'Offer',rejected:'Rejected',archived:'Archived'};
+const statuses = {new:'No status yet',shortlisted:'Shortlisted',applied:'Applied',interviewing:'Interviewing',offer:'Offer',rejected:'Rejected',archived:'Not relevant & not fit'};
+// Board columns per page. `match` picks the cards; `patch` is what dropping a card on the column saves.
+const lane=(key,label,match,patch,tone=patch.status)=>({key,label,match,patch,tone});
+const byStatus=(status,label,also=[])=>lane(status,label,j=>[status,...also].includes(j.review_status),{status});
+const notFit=byStatus('archived','Not relevant & not fit',['rejected']);
+const lanes={
+  board:[
+    lane('to-review','To review',j=>j.review_status==='new'&&!j.reviewed_at,{status:'new',reviewed:false},'new'),
+    lane('reviewed','Reviewed',j=>j.review_status==='new'&&j.reviewed_at,{status:'new',reviewed:true},'reviewed'),
+    byStatus('shortlisted','Shortlisted'),notFit],
+  review:[byStatus('shortlisted','Shortlisted'),byStatus('applied','Applied'),byStatus('interviewing','Interviewing'),byStatus('offer','Offer')],
+  closed:[notFit],
+};
+const reviewStatuses=['shortlisted','applied','interviewing','offer'];
 const state = {jobs:[], sources:[], runs:[], profile:{profile:{},version:0}, view:'board', layout:'board', query:'', remote:'', reviewed:'', detail:null, profileDraft:null};
 let noteTimer, pendingNote=null, noteChain=Promise.resolve(), toastTimer, focusBeforeDialog;
 let token = $('meta[name="workspace-token"]').content;
@@ -26,6 +39,21 @@ function toast(message,error=false){const box=$('#toast');box.textContent=messag
 function report(error){toast(error.message || 'Something went wrong.',true);}
 function shortDate(value){if(!value)return 'Not yet';const date=new Date(value);return Number.isNaN(date.valueOf())?value:date.toLocaleDateString(undefined,{month:'short',day:'numeric'});}
 function salary(job){if(job.salary_text)return job.salary_text;if(job.salary_min!=null||job.salary_max!=null){const fmt=n=>n==null?'':Number(n).toLocaleString();return `${job.salary_currency||''} ${fmt(job.salary_min)}${job.salary_max!=null?' – '+fmt(job.salary_max):'+'}${job.salary_period?' / '+job.salary_period:''}`.trim();}return '';}
+// Deadline line: an exact date wins; otherwise the posting's wording; otherwise say plainly that none is known.
+function deadline(job){
+  if(job.availability==='closed')return {text:'Posting closed',tone:'passed'};
+  const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(job.application_deadline||'');
+  if(m){
+    const day=new Date(+m[1],m[2]-1,+m[3]),today=new Date();today.setHours(0,0,0,0);
+    const label=day.toLocaleDateString('en-GB',{day:'numeric',month:'long',...(day.getFullYear()!==today.getFullYear()?{year:'numeric'}:{})});
+    const left=Math.round((day-today)/86400000);
+    if(left<0)return {text:`Deadline passed: ${label}`,tone:'passed'};
+    return {text:`Deadline is till ${label} · ${left===0?'last day':left===1?'1 day left':left+' days left'}`,tone:left<=7?'soon':''};
+  }
+  if(job.deadline_text&&job.deadline_text!=='Not listed')return {text:`Deadline: ${job.deadline_text}`,tone:''};
+  return job.deadline_text==='Not listed'?{text:'Deadline not listed',tone:'missing'}:{text:'Deadline not checked yet',tone:'missing'};
+}
+function deadlineLine(job,tag='div'){const d=deadline(job);return `<${tag} class="card-deadline ${d.tone?'is-'+d.tone:''}">${esc(d.text)}</${tag}>`;}
 function posted(job){return job.published_at?`Posted ${shortDate(job.published_at)}`:`Posting date not listed · found ${shortDate(job.first_seen_at)}`;}
 function fitBadge(score){if(score==null)return '';const tone=score>=75?'high':score>=55?'mid':'low';return `<span class="fit-badge fit-${tone}" title="Fit score from 1 to 100">${esc(score)}</span>`;}
 function fitChecks(text){if(!text)return '';return `<ul class="fit-checks">${text.split('\n').map(line=>{const tone={'+':'plus','−':'minus','✕':'block'}[line[0]]||'minus';return `<li class="check-${tone}">${esc(line)}</li>`;}).join('')}</ul>`;}
@@ -35,8 +63,8 @@ function profileReady(){const p=state.profile.profile;return Boolean(p.roles?.le
 async function refresh(render=true){
   const data=await api('/api/state');Object.assign(state,data);
   $('#count-all').textContent=state.jobs.length;
-  $('#count-unreviewed').textContent=state.jobs.filter(j=>!j.reviewed_at).length;
-  $('#count-shortlisted').textContent=state.jobs.filter(j=>j.review_status==='shortlisted').length;
+  $('#count-review').textContent=state.jobs.filter(j=>reviewStatuses.includes(j.review_status)).length;
+  $('#count-closed').textContent=state.jobs.filter(j=>['archived','rejected'].includes(j.review_status)).length;
   if(render) renderPage();
 }
 function navigate(view){
@@ -53,7 +81,7 @@ function heading(title,subtitle='',actions=''){
 function renderPage(){
   if(state.view==='profile')return renderProfile();
   if(state.view==='sources')return renderSources();
-  const titles={board:'Opportunities',unreviewed:'To review',shortlisted:'Shortlisted',closed:'Closed opportunities'};
+  const titles={board:'Opportunities',review:'To review',closed:'Not relevant & not fit'};
   $('#main').innerHTML=`<section class="page board-page">${heading(titles[state.view]||titles.board)}
     <div class="view-toolbar">
       <div class="view-tabs"><button class="view-tab ${state.layout==='board'?'selected':''}" data-layout="board">Board</button><button class="view-tab ${state.layout==='list'?'selected':''}" data-layout="list">List</button><span class="view-count" id="view-count"></span></div>
@@ -69,21 +97,22 @@ function renderPage(){
   renderJobs();
 }
 function filteredJobs(){return state.jobs.filter(j=>{
-  if(state.view==='unreviewed'&&j.reviewed_at)return false;
-  if(state.view==='shortlisted'&&j.review_status!=='shortlisted')return false;
+  if(state.view==='review'&&!reviewStatuses.includes(j.review_status))return false;
   if(state.view==='closed'&&!['rejected','archived'].includes(j.review_status))return false;
   if(state.reviewed==='unreviewed'&&j.reviewed_at)return false;
   if(state.reviewed==='reviewed'&&!j.reviewed_at)return false;
   if(state.remote&&j.remote_status!==state.remote)return false;
-  return !state.query||[j.title,j.company,j.location_text,...(j.skills||[]),...(j.review_tags||[])].join(' ').toLowerCase().includes(state.query.toLowerCase());
+  return !state.query||[j.title,j.company,j.location_text,j.source_names,...(j.skills||[]),...(j.review_tags||[])].join(' ').toLowerCase().includes(state.query.toLowerCase());
 });}
+function fromLinkedIn(job){return /linkedin/i.test(job.source_names||'');}
 function card(job){
   const details=[job.location_text].filter(Boolean);
   return `<article class="job-card" draggable="true" data-job="${esc(job.id)}">
     <div class="card-head"><button class="card-open" data-open-job="${esc(job.id)}">${esc(job.title)}</button>${fitBadge(job.fit_score)}</div>
-    <div class="card-company">${esc(job.company)}</div>
+    <div class="card-company">${esc(job.company)}${fromLinkedIn(job)?'<span class="source-badge linkedin" title="Found on LinkedIn">in LinkedIn</span>':''}</div>
     <div class="card-posted">${esc(posted(job))}</div>
     <div class="card-salary ${!salary(job)||salary(job).startsWith('Salary not listed')?'is-missing':''}">${esc(salary(job)||'Salary not listed')}</div>
+    ${deadlineLine(job)}
     ${job.summary?`<p class="card-summary">${esc(job.summary)}</p>${fitChecks(job.fit_reason)}${job.apply_tips?.startsWith('→ Skip')?'':applyTips(job.apply_tips)}`:''}
     ${details.length&&!job.summary?`<div class="card-details">${details.map(d=>`<div>${esc(d)}</div>`).join('')}</div>`:''}
     ${job.review_tags?.length?`<div class="card-tags">${job.review_tags.slice(0,3).map(t=>`<span class="mini-tag">${esc(t)}</span>`).join('')}</div>`:''}
@@ -93,10 +122,10 @@ function card(job){
 function renderJobs(){
   const jobs=filteredJobs();$('#view-count').textContent=jobs.length;
   if(state.layout==='list'){
-    $('#job-content').innerHTML=jobs.length?`<div class="table-wrap"><table class="jobs-table"><thead><tr><th>Fit</th><th>Job</th><th>Company</th><th>Posted</th><th>Salary</th><th>Status</th><th>Location</th><th>Review</th><th>Comments</th></tr></thead><tbody>${jobs.map(j=>`<tr><td>${fitBadge(j.fit_score)||'—'}</td><td><button class="table-title" data-open-job="${esc(j.id)}">${esc(j.title)}</button></td><td>${esc(j.company)}</td><td>${j.published_at?esc(shortDate(j.published_at)):'—'}</td><td>${esc(salary(j)||'Salary not listed')}</td><td>${pill(j.review_status)}</td><td>${esc(j.location_text||'Not specified')}</td><td>${j.reviewed_at?'Reviewed':'Not reviewed'}</td><td>${j.comment_count||'—'}</td></tr>`).join('')}</tbody></table></div>`:`<div class="no-results">${state.jobs.length?'No jobs match these filters.':'No jobs yet. Add a job or search with Claude.'}</div>`;
+    $('#job-content').innerHTML=jobs.length?`<div class="table-wrap"><table class="jobs-table"><thead><tr><th>Fit</th><th>Job</th><th>Company</th><th>Posted</th><th>Deadline</th><th>Salary</th><th>Status</th><th>Location</th><th>Review</th><th>Comments</th></tr></thead><tbody>${jobs.map(j=>`<tr><td>${fitBadge(j.fit_score)||'—'}</td><td><button class="table-title" data-open-job="${esc(j.id)}">${esc(j.title)}</button></td><td>${esc(j.company)}</td><td>${j.published_at?esc(shortDate(j.published_at)):'—'}</td><td>${deadlineLine(j,'span')}</td><td>${esc(salary(j)||'Salary not listed')}</td><td>${pill(j.review_status)}</td><td>${esc(j.location_text||'Not specified')}</td><td>${j.reviewed_at?'Reviewed':'Not reviewed'}</td><td>${j.comment_count||'—'}</td></tr>`).join('')}</tbody></table></div>`:`<div class="no-results">${state.jobs.length?'No jobs match these filters.':'No jobs yet. Add a job or search with Claude.'}</div>`;
   }else{
-    const columns=state.view==='shortlisted'?['shortlisted']:state.view==='closed'?['rejected','archived']:['new','shortlisted','applied','interviewing','offer',...(['rejected','archived'].filter(s=>jobs.some(j=>j.review_status===s)))];
-    $('#job-content').innerHTML=`${state.jobs.length&&jobs.length===0?'<p class="filter-empty" role="status">No jobs match these filters.</p>':''}<div class="board" aria-label="Job application board">${columns.map(status=>{const lane=jobs.filter(j=>j.review_status===status);return `<section class="column" data-column="${status}" aria-label="${statuses[status]} column"><div class="column-heading">${pill(status)}<span class="column-count">${lane.length}</span><button class="text-button column-add" data-add-status="${status}" aria-label="Add job to ${statuses[status]}">+</button></div><div class="column-body">${lane.map(card).join('')}<button class="new-card" data-add-status="${status}">+ New</button></div></section>`;}).join('')}</div>${state.jobs.length===0?'<p class="empty-board-hint">Add a job to get started, or use Search with Claude to collect listings.</p>':''}`;
+    const columns=lanes[state.view]||lanes.board;
+    $('#job-content').innerHTML=`${state.jobs.length&&jobs.length===0?'<p class="filter-empty" role="status">No jobs match these filters.</p>':''}<div class="board" aria-label="Job application board">${columns.map(col=>{const cards=jobs.filter(col.match);return `<section class="column" data-column="${col.key}" aria-label="${esc(col.label)} column"><div class="column-heading"><span class="status-pill tone-${col.tone}">${esc(col.label)}</span><span class="column-count">${cards.length}</span><button class="text-button column-add" data-add-status="${col.patch.status}" aria-label="Add job to ${esc(col.label)}">+</button></div><div class="column-body">${cards.map(card).join('')}<button class="new-card" data-add-status="${col.patch.status}">+ New</button></div></section>`;}).join('')}</div>${state.jobs.length===0?'<p class="empty-board-hint">Add a job to get started, or use Search with Claude to collect listings.</p>':''}`;
     $$('[data-add-status]').forEach(el=>el.onclick=()=>openAdd(el.dataset.addStatus));
     $$('.job-card').forEach(el=>{
       el.ondragstart=e=>{e.dataTransfer.setData('text/plain',el.dataset.job);e.dataTransfer.effectAllowed='move';el.classList.add('dragging');};
@@ -106,7 +135,7 @@ function renderJobs(){
     $$('[data-column]').forEach(el=>{
       el.ondragover=e=>{e.preventDefault();el.classList.add('drag-over');};
       el.ondragleave=e=>{if(!el.contains(e.relatedTarget))el.classList.remove('drag-over');};
-      el.ondrop=e=>{e.preventDefault();el.classList.remove('drag-over');const id=e.dataTransfer.getData('text/plain');if(state.jobs.some(j=>j.id===id))saveReview(id,{status:el.dataset.column}).catch(report);};
+      el.ondrop=e=>{e.preventDefault();el.classList.remove('drag-over');const id=e.dataTransfer.getData('text/plain');const col=(lanes[state.view]||lanes.board).find(c=>c.key===el.dataset.column);if(col&&state.jobs.some(j=>j.id===id))saveReview(id,col.patch).catch(report);};
     });
   }
   $$('[data-open-job]').forEach(el=>el.onclick=()=>openJob(el.dataset.openJob).catch(report));
@@ -121,7 +150,7 @@ function renderDetail(){
   $('#job-detail').innerHTML=`<div class="drawer-toolbar"><span>Job details</span><button class="text-button" id="close-job" aria-label="Close job details">Close</button></div>
     <div class="drawer-content"><div class="detail-company">${esc(job.company)}</div><h2 class="detail-title">${esc(job.title)}</h2><div class="detail-posted">${esc(posted(job))}</div>
     <div class="detail-actions"><select id="detail-status" aria-label="Job status">${Object.entries(statuses).map(([k,v])=>`<option value="${k}" ${r.status===k?'selected':''}>${v}</option>`).join('')}</select><button class="button ${r.reviewed_at?'reviewed-button':''}" id="mark-reviewed" aria-pressed="${Boolean(r.reviewed_at)}">${r.reviewed_at?'Reviewed':'Mark reviewed'}</button><a class="button" href="${esc(job.canonical_url)}" target="_blank" rel="noopener noreferrer">Open listing</a></div>
-    <div class="detail-properties">${property('Location',job.location_text)}${property('Salary',salary(job)||'Salary not listed')}${property('Work setup',job.remote_status==='unknown'?'Not specified':job.remote_status)}${property('Employment',job.employment_type?.replaceAll('_',' '))}${property('Eligibility',job.eligible_countries?.join(', ')||job.timezone_requirements)}</div>
+    <div class="detail-properties">${property('Location',job.location_text)}${property('Salary',salary(job)||'Salary not listed')}${property('Deadline',deadline(job).text)}${property('Work setup',job.remote_status==='unknown'?'Not specified':job.remote_status)}${property('Employment',job.employment_type?.replaceAll('_',' '))}${property('Eligibility',job.eligible_countries?.join(', ')||job.timezone_requirements)}</div>
     ${job.assessment?`<section class="detail-section fit-section"><div class="fit-heading">${fitBadge(job.assessment.fit_score)}<h3>Fit checks</h3></div><p class="fit-summary">${esc(job.assessment.summary)}</p>${fitChecks(job.assessment.fit_reason)}</section>${job.assessment.apply_tips?`<section class="detail-section"><h3>When you apply</h3>${applyTips(job.assessment.apply_tips)}</section>`:''}`:''}
     <section class="detail-section"><div class="section-title-row"><h3>Your notes</h3><span class="save-label" id="note-save-state">Saved automatically</span></div><textarea class="detail-notes" id="job-notes" aria-label="Your notes for this job" placeholder="Add notes…">${esc(r.notes)}</textarea></section>
     <section class="detail-section"><h3>Comments <span class="optional">${job.comments.length}</span></h3><div id="comments">${job.comments.map(c=>`<div class="comment"><div class="comment-meta"><strong>${esc(state.profile.profile.name||'You')}</strong><span>${shortDate(c.created_at)}</span><button class="text-button" data-delete-comment="${esc(c.id)}" aria-label="Delete comment">Delete</button></div><div class="comment-body">${esc(c.body)}</div></div>`).join('')}</div><form id="comment-form" class="comment-compose"><textarea id="comment-input" aria-label="Write a comment" placeholder="Write a comment…" maxlength="10000" required></textarea><div class="comment-compose-footer"><button class="button small" type="submit">Add comment</button></div></form></section>
@@ -144,7 +173,7 @@ function flushNotes(){
     catch(error){if(!pendingNote)pendingNote=note;if($('#note-save-state'))$('#note-save-state').textContent='Could not save · retry by editing';throw error;}
   });noteChain=promise;return promise;
 }
-async function saveReview(id,patch,redraw=false){await flushNotes();const detail=await api(`/api/jobs/${id}/review`,{method:'PATCH',body:JSON.stringify(patch)});if(state.detail?.id===id)state.detail=detail;await refresh();if(redraw)renderDetail();toast(patch.status?'Moved to '+statuses[patch.status]:patch.reviewed===false?'Marked as not reviewed':'Review saved');}
+async function saveReview(id,patch,redraw=false){await flushNotes();const detail=await api(`/api/jobs/${id}/review`,{method:'PATCH',body:JSON.stringify(patch)});if(state.detail?.id===id)state.detail=detail;await refresh();if(redraw)renderDetail();toast(patch.status==='new'&&patch.reviewed!==undefined?(patch.reviewed?'Moved to Reviewed':'Moved to To review'):patch.status?'Moved to '+statuses[patch.status]:patch.reviewed===false?'Marked as not reviewed':'Review saved');}
 async function closeJob(){await flushNotes();$('#job-dialog').close();state.detail=null;focusBeforeDialog?.focus();}
 function openAdd(status='new'){$('#add-form').reset();$('#add-status').innerHTML=Object.entries(statuses).map(([k,v])=>`<option value="${k}" ${k===status?'selected':''}>${v}</option>`).join('');$('#add-dialog').showModal();}
 function openSearch(){$('#search-profile-hint').textContent=profileReady()?`Your saved search profile (version ${state.profile.version}) will guide the next search.`:'Your profile is empty. Add your skills and preferences to guide the search.';$('#search-dialog').showModal();}

@@ -164,6 +164,33 @@ class JobStorageTests(unittest.TestCase):
             self.assertEqual(backup.execute('SELECT count(*) FROM jobs').fetchone()[0], 65)
             self.assertEqual(backup.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
 
+    def test_deadlines_are_validated_kept_and_editable(self):
+        run = self.start()
+        error = self.ingest(run, [self.job('1', application_deadline='26 November')], ok=False)
+        self.assertIn('2026-11-26', error['error'])
+        self.ingest(run, [self.job('1', application_deadline='2026-11-26', deadline_text='Apply by 26 November'),
+                          self.job('2', deadline_text='Not listed')])
+        dated, undated = sorted(self.call('list'), key=lambda job: job['canonical_url'])
+        self.assertEqual((dated['application_deadline'], dated['deadline_text']), ('2026-11-26', 'Apply by 26 November'))
+        self.assertEqual((undated['application_deadline'], undated['deadline_text']), (None, 'Not listed'))
+        # A later sighting without a deadline does not erase the known one.
+        self.ingest(run, [self.job('1')])
+        self.assertEqual(self.sql(f"SELECT application_deadline FROM jobs WHERE id = '{dated['id']}'"), [('2026-11-26',)])
+        updated = self.call('deadline', undated['id'], '--date', '2026-12-01', '--text', 'Closes 1 December')
+        self.assertEqual(updated['application_deadline'], '2026-12-01')
+        self.call('deadline', undated['id'], '--date', '2026-02-30', ok=False)
+        self.assertEqual(self.call('deadline', undated['id'], '--availability', 'closed')['availability'], 'closed')
+        self.assertEqual(self.sql(f"SELECT application_deadline FROM jobs WHERE id = '{undated['id']}'"), [('2026-12-01',)])
+
+    def test_feedback_lists_comments_and_notes_newest_first(self):
+        run = self.start()
+        self.ingest(run, [self.job('1')])
+        job_id = self.call('list')[0]['id']
+        self.call('review', job_id, '--status', 'archived', '--notes', 'Entry level')
+        feedback = self.call('feedback')
+        self.assertEqual([(f['kind'], f['text'], f['status']) for f in feedback], [('note', 'Entry level', 'archived')])
+        self.assertEqual(self.call('feedback', '--since', '2999-01-01'), [])
+
     def test_assessments_are_validated_and_sort_listing(self):
         run = self.start()
         self.ingest(run, [self.job('1'), self.job('2')])

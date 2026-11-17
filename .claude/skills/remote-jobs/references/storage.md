@@ -116,7 +116,9 @@ not a real vacancy to insert into the user's database:
 ```
 
 Other accepted fields: `timezone_requirements`, `seniority`, `published_at`
-(ISO date or datetime), `employer_job_id`, `source_job_id` (text IDs), and `skills`
+(ISO date or datetime), `application_deadline` (last day to apply, `YYYY-MM-DD`),
+`deadline_text` (the posting's wording, or exactly `Not listed` when the posting
+was read and states none), `employer_job_id`, `source_job_id` (text IDs), and `skills`
 (array of text). `eligible_countries` is also an array of text when known. Omit
 unknown values or use null. `remote_status`: `remote`, `hybrid`, `onsite`,
 `unknown`. `availability`: `open`, `closed`, `unknown`.
@@ -137,6 +139,28 @@ query parameters and hash routes, and keeps distinct URLs distinct. Cross-source
 duplicates without a confirmed common canonical URL remain separate; fuzzy merges
 are deliberately not automatic. A changed canonical identity for an already-seen
 source URL needs manual resolution before import.
+
+## Deadlines and the user's feedback
+
+Record or correct a deadline after rechecking a posting, without a collection run:
+
+```sh
+python3 scripts/jobs.py deadline JOB_ID --date 2026-11-26 --text 'Apply by 26 November'
+python3 scripts/jobs.py deadline JOB_ID --text 'Not listed'
+python3 scripts/jobs.py deadline JOB_ID --availability closed
+```
+
+`--availability` records what the recheck showed: `open` only when the employer's
+page or the source still lists the job, `closed` only when the posting says so or
+is gone from the employer's page. The board shows closed jobs as "Posting closed".
+
+`--date ''` clears a wrong date. Read the user's comments and notes on jobs,
+newest first, before planning a search:
+
+```sh
+python3 scripts/jobs.py feedback
+python3 scripts/jobs.py feedback --since 2026-11-17
+```
 
 ## Review, export and back up
 

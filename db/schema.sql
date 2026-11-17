@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     employer_job_id TEXT,
     availability TEXT NOT NULL DEFAULT 'unknown'
         CHECK (availability IN ('open', 'closed', 'unknown')),
+    application_deadline TEXT,  -- last day to apply, YYYY-MM-DD
+    deadline_text TEXT,         -- posting's own wording, or 'Not listed' once checked
     first_seen_at TEXT NOT NULL,
     last_seen_at TEXT NOT NULL,
     CHECK (salary_min IS NULL OR salary_max IS NULL OR salary_min <= salary_max)

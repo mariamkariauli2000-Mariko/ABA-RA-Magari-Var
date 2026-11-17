@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import uuid
 from contextlib import contextmanager
@@ -25,7 +25,10 @@ TEXT_FIELDS = (
     'title', 'company', 'description', 'location_text', 'timezone_requirements',
     'remote_status', 'employment_type', 'seniority', 'salary_currency',
     'salary_period', 'salary_text', 'published_at', 'employer_job_id', 'availability',
+    'application_deadline', 'deadline_text',
 )
+# deadline_text keeps the posting's own wording, or exactly this when the posting was checked and states none.
+DEADLINE_NOT_LISTED = 'Not listed'
 JOB_FIELDS = set(TEXT_FIELDS) | {
     'source_url', 'canonical_url', 'source_job_id', 'evidence',
     'eligible_countries', 'skills', 'salary_min', 'salary_max',
@@ -209,10 +212,57 @@ def add_source(db, name, url, kind, method='discover', notes=''):
 
 
 def add_missing_columns(db):
+    changed = False
     columns = {row[1] for row in db.execute('PRAGMA table_info(job_assessments)')}
     if 'apply_tips' not in columns:
         db.execute('ALTER TABLE job_assessments ADD COLUMN apply_tips TEXT')
+        changed = True
+    columns = {row[1] for row in db.execute('PRAGMA table_info(jobs)')}
+    for column in ('application_deadline', 'deadline_text'):
+        if column not in columns:
+            db.execute(f'ALTER TABLE jobs ADD COLUMN {column} TEXT')
+            changed = True
+    if changed:
         db.commit()
+
+
+def check_deadline(value):
+    """Deadlines are calendar dates (YYYY-MM-DD), the last day applications are accepted."""
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
+        raise ValueError('application_deadline must be a date like 2026-11-26')
+    date.fromisoformat(value)
+    return value
+
+
+def set_deadline(db, job_id, deadline=None, text=None, availability=None):
+    if deadline is None and text is None and availability is None:
+        raise ValueError('Supply --date, --text, or --availability')
+    changes = {}
+    if availability is not None:
+        if availability not in ('open', 'closed', 'unknown'):
+            raise ValueError('availability must be open, closed, or unknown')
+        changes['availability'] = availability
+    if deadline is not None:
+        changes['application_deadline'] = check_deadline(deadline.strip()) if deadline.strip() else None
+    if text is not None:
+        changes['deadline_text'] = text.strip() or None
+    with write_transaction(db):
+        require_row(db, 'jobs', 'id', job_id)
+        db.execute('UPDATE jobs SET ' + ', '.join(f'{k} = ?' for k in changes) + ' WHERE id = ?', (*changes.values(), job_id))
+    row = require_row(db, 'jobs', 'id', job_id)
+    return {k: row[k] for k in ('id', 'title', 'company', 'application_deadline', 'deadline_text', 'availability')}
+
+
+def feedback(db, since=None):
+    """The user's own comments and notes on jobs, newest first, for planning the next search."""
+    rows = db.execute('''SELECT * FROM (
+            SELECT c.created_at AS at, 'comment' AS kind, c.body AS text, j.id AS job_id, j.title, j.company, COALESCE(r.status, 'new') AS status
+              FROM job_comments c JOIN jobs j ON j.id = c.job_id LEFT JOIN reviews r ON r.job_id = j.id
+            UNION ALL
+            SELECT r.updated_at, 'note', r.notes, j.id, j.title, j.company, r.status
+              FROM reviews r JOIN jobs j ON j.id = r.job_id WHERE r.notes != '')
+          WHERE ? IS NULL OR at >= ? ORDER BY at DESC''', (since, since)).fetchall()
+    return [dict(row) for row in rows]
 
 
 def initialize(db):
@@ -276,6 +326,8 @@ def normalize_job(record):
         raise ValueError('remote_status must be remote, hybrid, onsite, or unknown')
     if normalized.get('availability', 'unknown') not in ('open', 'closed', 'unknown'):
         raise ValueError('availability must be open, closed, or unknown')
+    if normalized.get('application_deadline'):
+        check_deadline(normalized['application_deadline'])
     if normalized.get('published_at'):
         datetime.fromisoformat(normalized['published_at'].replace('Z', '+00:00'))
     normalized['canonical_url'] = normalize_url(record.get('canonical_url') or record['source_url'])
@@ -346,7 +398,9 @@ def list_jobs(db, args):
     rows = db.execute('''SELECT j.*, COALESCE(r.status, 'new') AS review_status,
                          COALESCE(r.notes, '') AS review_notes, COALESCE(r.tags_json, '[]') AS review_tags_json,
                          r.reviewed_at, (SELECT count(*) FROM job_comments c WHERE c.job_id = j.id) AS comment_count,
-                         a.fit_score, a.fit_reason, a.summary, a.apply_tips
+                         a.fit_score, a.fit_reason, a.summary, a.apply_tips,
+                         (SELECT group_concat(name, ' · ') FROM (SELECT DISTINCT s.name FROM sightings si
+                          JOIN sources s ON s.id = si.source_id WHERE si.job_id = j.id ORDER BY s.name)) AS source_names
                          FROM jobs j LEFT JOIN reviews r ON j.id = r.job_id
                          LEFT JOIN job_assessments a ON j.id = a.job_id''' + where +
                       ' ORDER BY a.fit_score IS NULL, a.fit_score DESC, j.first_seen_at DESC, j.id LIMIT ? OFFSET ?',
@@ -425,6 +479,10 @@ def execute(db, args):
     if args.command == 'assess':
         content = sys.stdin.read() if args.file == '-' else Path(args.file).read_text()
         return save_assessments(db, json.loads(content))
+    if args.command == 'deadline':
+        return set_deadline(db, args.id, args.date, args.text, args.availability)
+    if args.command == 'feedback':
+        return feedback(db, args.since)
     if args.command == 'review':
         if args.status is None and args.notes is None and args.tag is None and args.reviewed is None:
             raise ValueError('Supply --status, --notes, --tag, or --reviewed')
@@ -529,6 +587,12 @@ def parser():
     review.add_argument('--tag', action='append', help='Replaces all tags with the supplied repeated --tag values')
     assess = sub.add_parser('assess', help='Save fit scores, reasons and short summaries')
     assess.add_argument('--file', required=True, help='JSON array of {job_id, fit_score, fit_reason, summary}, or - for stdin')
+    deadline = sub.add_parser('deadline', help='Record a job\'s application deadline after checking the posting')
+    deadline.add_argument('id')
+    deadline.add_argument('--date', help='Last day to apply, YYYY-MM-DD; empty string clears it')
+    deadline.add_argument('--text', help=f'Posting wording such as "Rolling", or "{DEADLINE_NOT_LISTED}" when it states none')
+    deadline.add_argument('--availability', choices=('open', 'closed', 'unknown'), help='What the posting showed when rechecked')
+    sub.add_parser('feedback', help='The user\'s comments and notes on jobs, newest first').add_argument('--since', help='ISO date or datetime')
     sub.add_parser('stats')
     for command in ('export', 'backup'):
         output = sub.add_parser(command)
